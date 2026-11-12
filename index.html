@@ -11,8 +11,6 @@
     canvas { display: block; }
     #crosshair { position: fixed; left: 50%; top: 50%; width: 6px; height: 6px; margin: -3px 0 0 -3px; border-radius: 50%; background: rgba(240,238,230,0.75); box-shadow: 0 0 2px rgba(0,0,0,0.6); transition: transform 0.12s, background 0.12s; pointer-events: none; }
     #crosshair.hot { transform: scale(2.1); background: rgba(255,255,255,0.95); }
-    #charge { position: fixed; left: 50%; top: 50%; width: 44px; height: 44px; margin: -22px 0 0 -22px; pointer-events: none; opacity: 0; transition: opacity 0.1s; }
-    #charge circle { fill: none; stroke: rgba(240,238,230,0.85); stroke-width: 2.5; stroke-linecap: round; transform: rotate(-90deg); transform-origin: 50% 50%; }
     #hint { position: fixed; left: 50%; top: calc(50% + 28px); transform: translateX(-50%); font-size: 13px; letter-spacing: 0.08em; color: rgba(240,238,230,0.8); text-shadow: 0 1px 2px #000; pointer-events: none; white-space: nowrap; }
     #overlay { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(8,8,10,0.86); cursor: pointer; z-index: 5; padding: 16px; box-sizing: border-box; }
     #overlay .card { max-width: 440px; text-align: center; }
@@ -32,28 +30,29 @@
 <body>
   <div id="app"></div>
   <div id="crosshair"></div>
-  <svg id="charge" viewBox="0 0 44 44"><circle cx="22" cy="22" r="18" stroke-dasharray="113.1" stroke-dashoffset="113.1"/></svg>
   <div id="hint"></div>
   <div id="debug">
     <div class="row"><label>Color <span id="satVal"></span></label><input id="sat" type="range" min="0" max="1" step="0.01" /></div>
+    <div class="row"><label>Throw sensitivity <span id="flickVal"></span></label><input id="flick" type="range" min="0.4" max="2.5" step="0.1" /></div>
     <div class="row muted" id="dbgInfo"></div>
     <div class="muted">` to close</div>
   </div>
   <div id="overlay">
     <div class="card">
       <h1>OFFICE PARADOX</h1>
-      <div class="sub">PROTOTYPE · STAGE 1 · THE BOX · v2</div>
+      <div class="sub">PROTOTYPE · STAGE 1 · THE BOX · v3</div>
       <div class="go">CLICK TO CLOCK IN</div>
       <table>
         <tr><td>Mouse</td><td>Look around</td></tr>
         <tr><td>W A S D</td><td>Walk, or roll the chair</td></tr>
         <tr><td>E</td><td>Sit / stand</td></tr>
+        <tr><td>C</td><td>Kneel, then crawl · Space to stand up</td></tr>
         <tr><td>Click</td><td>Grab · click again to drop</td></tr>
-        <tr><td>Hold click</td><td>Wind up a throw, release to let go</td></tr>
+        <tr><td>Hold click, pull back, flick up</td><td>Throw (let go while flicking)</td></tr>
         <tr><td>Hold right-click</td><td>Inspect what you're holding</td></tr>
         <tr><td>Arrow keys</td><td>Look (if the mouse won't lock)</td></tr>
         <tr><td>Esc</td><td>Pause</td></tr>
-        <tr><td>`</td><td>Debug: color slider</td></tr>
+        <tr><td>`</td><td>Debug: color + throw sensitivity</td></tr>
       </table>
     </div>
   </div>

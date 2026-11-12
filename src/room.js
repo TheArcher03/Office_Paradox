@@ -58,6 +58,55 @@ export function buildRoom(scene, world) {
     scene.add(p);
   }
 
+  // ---- Grabbable props -------------------------------------------------------
+  // Collision groups: the world, props, and the player's own body (so a held object can pass through you).
+  const GROUP = { WORLD: 1, PROP: 2, PLAYER: 4 };
+  const impact = { fn: null };
+  // stuck = held in place (taped/pinned) until the player grabs it, then it becomes a normal physics object
+  function addProp(name, mesh, shape, mass, x, y, z, { sound = 'thunk', rot = null, quat = null, linDamp = 0.05, angDamp = 0.2, offset = null, shapes = null, stuck = false } = {}) {
+    mesh.traverse((o) => {
+      if (!o.isMesh) return;
+      o.castShadow = true; o.receiveShadow = true;
+      o.material = Array.isArray(o.material) ? o.material.map((m) => m.clone()) : o.material.clone(); // own materials, so it can glow on hover
+    });
+    mesh.userData.prop = name;
+    scene.add(mesh);
+    const body = new CANNON.Body({
+      mass: stuck ? 0 : mass, type: stuck ? CANNON.Body.STATIC : CANNON.Body.DYNAMIC, material: physMat,
+      linearDamping: linDamp, angularDamping: angDamp, allowSleep: true, sleepSpeedLimit: 0.05, sleepTimeLimit: 0.6,
+      collisionFilterGroup: GROUP.PROP, collisionFilterMask: GROUP.WORLD | GROUP.PROP | GROUP.PLAYER,
+    });
+    if (shape) body.addShape(shape, offset || undefined);
+    if (shapes) shapes.forEach(([sh, o, q]) => body.addShape(sh, o, q));
+    body.position.set(x, y, z);
+    if (rot) body.quaternion.setFromEuler(...rot);
+    if (quat) body.quaternion.set(quat.x, quat.y, quat.z, quat.w);
+    world.addBody(body);
+    const p = { name, mesh, body, sound, mass, angDamp, stuck };
+    body.userData = p;
+    body.addEventListener('collide', (e) => impact.fn && impact.fn(p, e));
+    mesh.position.copy(body.position); mesh.quaternion.copy(body.quaternion);
+    props.push(p);
+    return p;
+  }
+  // a single sheet of paper: light, floaty, and it can lie flat or be pinned to a wall
+  const sheetTex = { spreadsheet: T.spreadsheet(), memo: T.paper(true), blank: T.paper(false) };
+  const sheetEdge = std({ color: '#efece4', roughness: 0.95 });
+  function makeSheet(kind, x, y, z, opts = {}) {
+    const face = std({ map: sheetTex[kind], roughness: 0.95 });
+    const m = new THREE.Mesh(new THREE.BoxGeometry(0.215, 0.002, 0.28), [sheetEdge, sheetEdge, face, face, sheetEdge, sheetEdge]);
+    return addProp(kind === 'memo' ? 'memo' : 'sheet', m, new CANNON.Box(new CANNON.Vec3(0.1075, 0.003, 0.14)), 0.006, x, y, z,
+      { sound: 'paper', linDamp: 0.55, angDamp: 0.6, ...opts });
+  }
+  // orientation for something flat stuck to a wall, face out, with a small tilt
+  function wallQuat(wall, tilt = 0) {
+    const yaw = { back: 0, front: Math.PI, left: Math.PI / 2, right: -Math.PI / 2 }[wall];
+    const q = new THREE.Quaternion().setFromEuler(new THREE.Euler(Math.PI / 2, 0, 0));
+    q.premultiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), tilt));
+    q.premultiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), yaw));
+    return q;
+  }
+
   // ---- Floor
   const floor = new THREE.Mesh(new THREE.PlaneGeometry(12, 12), std({ map: T.carpet(), roughness: 1 }));
   floor.material.map.repeat.set(28, 28);
@@ -145,6 +194,7 @@ export function buildRoom(scene, world) {
   const pedX = (retX0 + H) / 2 + 0.03, pedZ = retZ1 - 0.25;
   staticBox(H - retX0 - 0.08, 0.66, 0.42, pedX, 0.33 + 0.01, pedZ, panelMat);
   [0.12, 0.33, 0.54].forEach((y) => staticBox(0.015, 0.015, 0.14, retX0 + 0.065, y, pedZ, trimMat, { collide: false }));
+  colliders.push({ minX: pedX - (H - retX0 - 0.08) / 2, maxX: H, minZ: pedZ - 0.21, maxZ: retZ1 });  // pedestal + end panel (even when crawling)
   colliders.push({ minX: -H, maxX: H, minZ: -H, maxZ: backZ1, desk: true });
   colliders.push({ minX: retX0, maxX: H, minZ: backZ1, maxZ: retZ1, desk: true });
 
@@ -164,14 +214,12 @@ export function buildRoom(scene, world) {
     const spine = T.binderSpine(col, col !== '#d8d4c8');
     const mats = [std({ color: col }), std({ color: col }), std({ color: col }), std({ color: col }), std({ map: spine, roughness: 0.7 }), std({ color: col })];
     const b = new THREE.Mesh(new THREE.BoxGeometry(w, hgt, 0.25), mats);
-    b.position.set(bx + w / 2, shelfY + 0.0125 + hgt / 2, -H + 0.145);
-    b.rotation.z = i === binderColors.length - 1 ? -0.18 : 0;
-    b.castShadow = true; b.receiveShadow = true; scene.add(b);
-    bx += w + 0.004;
+    addProp('binder', b, new CANNON.Box(new CANNON.Vec3(w / 2, hgt / 2, 0.125)), 0.6, bx + w / 2, shelfY + 0.0125 + hgt / 2 + 0.001, -H + 0.145, { sound: 'heavy' });
+    bx += w + 0.006;
   });
-  staticCollider((bx - shelfX0) / 2, 0.15, 0.125, (shelfX0 + bx) / 2, shelfY + 0.16, -H + 0.145);
   // a box file lying flat at the end of the shelf; the open space next to it is where something new might appear one day
-  staticBox(0.3, 0.09, 0.24, shelfX1 - 0.2, shelfY + 0.0575, -H + 0.14, std({ color: '#c8b89a', roughness: 0.9 }));
+  addProp('boxFile', new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.09, 0.24), std({ color: '#c8b89a', roughness: 0.9 })),
+    new CANNON.Box(new CANNON.Vec3(0.15, 0.045, 0.12)), 0.7, shelfX1 - 0.2, shelfY + 0.0125 + 0.046, -H + 0.14, { sound: 'heavy' });
 
   // ---- Computer on the back desk: deep beige CRT, keyboard, mousepad + mouse, tower under the desk
   const beige = std({ color: '#d2cab3', roughness: 0.6 });
@@ -191,24 +239,31 @@ export function buildRoom(scene, world) {
   powerLed.position.set(monX + 0.17, monY - 0.165, monFront + 0.002); scene.add(powerLed);
   // sticky notes on the monitor bezel
   [[monX + 0.2, monY + 0.15, 0.12, 0], [monX - 0.21, monY - 0.12, -0.09, 1]].forEach(([x, y, r, k]) => {
-    const n = new THREE.Mesh(new THREE.PlaneGeometry(0.065, 0.065), std({ map: T.stickyNote(k), roughness: 0.9, side: THREE.DoubleSide }));
-    n.position.set(x, y, monFront + 0.003); n.rotation.z = r; scene.add(n);
+    const face = std({ map: T.stickyNote(k), roughness: 0.9 });
+    const back = std({ color: '#e6cf55', roughness: 0.9 });
+    const n = new THREE.Mesh(new THREE.BoxGeometry(0.065, 0.065, 0.0015), [back, back, back, back, face, back]);
+    addProp('stickyNote', n, new CANNON.Box(new CANNON.Vec3(0.0325, 0.0325, 0.003)), 0.002, x, y, monFront + 0.004,
+      { sound: 'paper', linDamp: 0.9, angDamp: 0.8, rot: [0, 0, r], stuck: true });
   });
-  const kb = new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.025, 0.16), std({ map: T.keyboard(), roughness: 0.6 }));
-  kb.position.set(monX, DT + 0.013, -0.67); kb.rotation.x = -0.05; kb.castShadow = true; kb.receiveShadow = true; scene.add(kb);
-  staticCollider(0.23, 0.0125, 0.08, monX, DT + 0.013, -0.67);
+  const kbSide = std({ color: '#cfc6ae', roughness: 0.6 });
+  const kb = new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.025, 0.16), [kbSide, kbSide, std({ map: T.keyboard(), roughness: 0.6 }), kbSide, kbSide, kbSide]);
+  addProp('keyboard', kb, new CANNON.Box(new CANNON.Vec3(0.23, 0.0125, 0.08)), 0.8, monX, DT + 0.0135, -0.67, { sound: 'plastic' });
   const pad = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.004, 0.18), std({ color: '#2d5876', roughness: 0.95 }));
   pad.position.set(0.12, DT + 0.002, -0.68); pad.receiveShadow = true; scene.add(pad);
-  const mouse = new THREE.Mesh(new THREE.CapsuleGeometry(0.028, 0.04, 4, 10), beige);
-  mouse.rotation.x = Math.PI / 2; mouse.scale.set(1, 1, 0.55); mouse.position.set(0.12, DT + 0.019, -0.67); mouse.castShadow = true; scene.add(mouse);
+  const mouseShell = new THREE.Mesh(new THREE.CapsuleGeometry(0.028, 0.04, 4, 10), beige);
+  mouseShell.rotation.x = Math.PI / 2; mouseShell.scale.set(1, 1, 0.55);
+  const mouseGroup = new THREE.Group(); mouseGroup.add(mouseShell);
+  const mouseProp = addProp('mouse', mouseGroup, new CANNON.Box(new CANNON.Vec3(0.028, 0.0155, 0.048)), 0.1, 0.12, DT + 0.017, -0.67, { sound: 'plastic' });
   const cordMat = std({ color: '#bdb6a0' });
-  scene.add(new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3([
-    new THREE.Vector3(0.12, DT + 0.012, -0.71), new THREE.Vector3(0.14, DT + 0.006, -0.85), new THREE.Vector3(0.02, DT + 0.005, -1.05), new THREE.Vector3(-0.1, DT + 0.005, -1.2)]), 20, 0.004, 5), cordMat));
+  const mouseCord = new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3([
+    new THREE.Vector3(0.12, DT + 0.012, -0.71), new THREE.Vector3(0.14, DT + 0.006, -0.85), new THREE.Vector3(0.02, DT + 0.005, -1.05), new THREE.Vector3(-0.1, DT + 0.005, -1.2)]), 20, 0.004, 5), cordMat);
+  scene.add(mouseCord);
   staticBox(0.2, 0.42, 0.45, 0.28, 0.21, -1.05, beige); // tower under the desk
+  colliders.push({ minX: 0.16, maxX: 0.4, minZ: -H, maxZ: -0.81 });
   staticBox(0.12, 0.012, 0.004, 0.28, 0.33, -0.824, std({ color: '#333' }), { collide: false }); // floppy slot
 
   // ---- Desk phone on the return, near the corner
-  const phone = new THREE.Group(); phone.position.set(0.98, DT, -0.32); phone.rotation.y = Math.PI / 2; scene.add(phone);
+  const phone = new THREE.Group();
   const phoneMat = std({ color: '#2a2b2d', roughness: 0.45 });
   const pBase = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.05, 0.22), phoneMat); pBase.position.y = 0.025; phone.add(pBase);
   const pKeys = new THREE.Mesh(new THREE.PlaneGeometry(0.12, 0.12), std({ map: T.phoneKeypad(), roughness: 0.5 }));
@@ -217,8 +272,8 @@ export function buildRoom(scene, world) {
   [-0.09, 0.07].forEach((z) => { const cup = new THREE.Mesh(new THREE.BoxGeometry(0.065, 0.045, 0.06), phoneMat); cup.position.set(-0.07, 0.065, z); phone.add(cup); });
   const coil = []; for (let i = 0; i <= 80; i++) { const t = i / 80; coil.push(new THREE.Vector3(-0.1 - 0.03 * Math.sin(t * Math.PI) + 0.012 * Math.cos(t * 50), 0.015 + 0.012 * Math.sin(t * 50), -0.12 + 0.2 * t)); }
   const coilMesh = new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(coil), 240, 0.003, 4), phoneMat); phone.add(coilMesh);
-  phone.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
-  staticCollider(0.11, 0.05, 0.12, 0.98, DT + 0.05, -0.32);
+  addProp('phone', phone, new CANNON.Box(new CANNON.Vec3(0.1, 0.045, 0.11)), 0.9, 0.98, DT + 0.001, -0.32,
+    { offset: new CANNON.Vec3(0, 0.045, 0), rot: [0, Math.PI / 2, 0], sound: 'plastic' });
 
   // ---- Printer on the far end of the return
   const prX = 1.0, prZ = 0.2;
@@ -249,6 +304,7 @@ export function buildRoom(scene, world) {
   staticCollider(0.13, 0.11, 0.17, trayX, DT + 0.11, trayZ);
   const stackX = -0.78, stackZ = -0.98;
   const stack = new THREE.Group(); stack.position.set(stackX, DT, stackZ); scene.add(stack);
+  stack.userData.dispenser = 'sheet';   // click it to pull a sheet off the top
   for (let i = 0; i < 14; i++) {
     const s = new THREE.Mesh(new THREE.BoxGeometry(0.215, 0.004, 0.28), paperMat);
     s.position.set((Math.random() - 0.5) * 0.012, 0.002 + i * 0.0042, (Math.random() - 0.5) * 0.012);
@@ -258,9 +314,9 @@ export function buildRoom(scene, world) {
   top.rotation.x = -Math.PI / 2; top.position.y = 0.062; stack.add(top);
   staticCollider(0.11, 0.03, 0.14, stackX, DT + 0.03, stackZ);
   [[0.55, -1.02, 0.35, true], [0.98, 0.0, -0.25, false], [-0.55, -1.12, -0.12, true]].forEach(([x, z, r, ss]) => {
-    const sh = new THREE.Mesh(new THREE.PlaneGeometry(0.215, 0.28), std({ map: ss ? T.spreadsheet() : T.paper(true), roughness: 0.95 }));
-    sh.rotation.x = -Math.PI / 2; sh.rotation.z = r; sh.position.set(x, DT + 0.0016, z); sh.receiveShadow = true; scene.add(sh);
+    makeSheet(ss ? 'spreadsheet' : 'memo', x, DT + 0.004, z, { rot: [0, r, 0] });
   });
+  const spawnSheet = (x, y, z) => makeSheet('spreadsheet', x, y, z);
 
   // ---- Things on the walls
   const cal = wallPlane(0.36, 0.5, T.calendar(), 'left', -0.12, 1.42); cal.name = 'calendar';   // stuck on the wrong month
@@ -269,10 +325,12 @@ export function buildRoom(scene, world) {
   [[0.63, 1.69], [1.01, 1.69]].forEach(([a, y]) => pin('left', a, y));
   staticBox(0.02, 0.66, 0.8, H - 0.01, 1.42, -0.0, std({ color: '#6e5232' }), { collide: false, shadow: false });
   wallPlane(0.8, 0.53, T.corkboard(), 'right', 0.0, 1.42, { inset: 0.0215 });                  // corkboard over the return
-  const memo = () => std({ map: T.paper(true), roughness: 0.95 });
-  wallPlane(0.2, 0.27, null, 'back', 0.28, 1.2, { tilt: 0.04, mat: memo() }); pin('back', 0.28, 1.32);
-  wallPlane(0.2, 0.27, null, 'back', 1.08, 1.32, { tilt: -0.03, mat: memo() }); pin('back', 1.08, 1.44);
-  wallPlane(0.2, 0.27, null, 'front', 0.15, 1.4, { tilt: 0.02, mat: memo() }); pin('front', 0.15, 1.52);
+  // pinned memos: pull them off the wall (the pin stays behind)
+  [['back', 0.28, 1.2, 0.04], ['back', 1.08, 1.32, -0.03], ['front', 0.15, 1.4, 0.02]].forEach(([wall, a, y, tilt]) => {
+    const pos = { back: [a, y, -H + 0.006], front: [a, y, H - 0.006] }[wall];
+    makeSheet('memo', pos[0], pos[1], pos[2], { quat: wallQuat(wall, tilt), stuck: true });
+    pin(wall, a, y + 0.12);
+  });
 
   // ---- Wall clock (back wall, right of the shelf)
   const clock = new THREE.Group(); clock.position.set(0.72, 1.95, -H + 0.03); scene.add(clock);
@@ -295,25 +353,24 @@ export function buildRoom(scene, world) {
   // tucked at the desk's front-left corner: still "by the desk", but the opening is reachable for a shot
   const canX = -1.08, canZ = -0.39, canR = 0.155, canH = 0.33;
   const meshTex = T.wireMesh();
+  const canGroup = new THREE.Group();
   const can = new THREE.Mesh(new THREE.CylinderGeometry(canR + 0.015, canR - 0.02, canH, 28, 1, true),
     new THREE.MeshStandardMaterial({ color: '#1d1d1d', alphaMap: meshTex, transparent: true, alphaTest: 0.4, side: THREE.DoubleSide, metalness: 0.6, roughness: 0.4 }));
-  can.position.set(canX, canH / 2, canZ); can.castShadow = true; scene.add(can);
+  can.position.y = canH / 2; canGroup.add(can);
   const canRim = new THREE.Mesh(new THREE.TorusGeometry(canR + 0.015, 0.006, 6, 32), std({ color: '#1d1d1d', metalness: 0.6, roughness: 0.4 }));
-  canRim.rotation.x = Math.PI / 2; canRim.position.set(canX, canH, canZ); scene.add(canRim);
-  const canBase = new THREE.Mesh(new THREE.CircleGeometry(canR - 0.02, 28), std({ color: '#1d1d1d' }));
-  canBase.rotation.x = -Math.PI / 2; canBase.position.set(canX, 0.004, canZ); scene.add(canBase);
-  const canBody = new CANNON.Body({ mass: 0, material: physMat });
+  canRim.rotation.x = Math.PI / 2; canRim.position.y = canH; canGroup.add(canRim);
+  const canBase = new THREE.Mesh(new THREE.CircleGeometry(canR - 0.02, 28), std({ color: '#1d1d1d', side: THREE.DoubleSide }));
+  canBase.rotation.x = -Math.PI / 2; canBase.position.y = 0.006; canGroup.add(canBase);
+  const canShapes = [];
   const segs = 12;
   for (let i = 0; i < segs; i++) {
     const a = (i / segs) * Math.PI * 2;
     const q = new CANNON.Quaternion(); q.setFromEuler(0, -a, 0);
-    canBody.addShape(new CANNON.Box(new CANNON.Vec3(0.006, canH / 2, (Math.PI * canR) / segs + 0.004)),
-      new CANNON.Vec3(Math.cos(a) * canR, canH / 2, Math.sin(a) * canR), q);
+    canShapes.push([new CANNON.Box(new CANNON.Vec3(0.006, canH / 2, (Math.PI * canR) / segs + 0.004)), new CANNON.Vec3(Math.cos(a) * canR, canH / 2, Math.sin(a) * canR), q]);
   }
-  canBody.position.set(canX, 0, canZ);
-  world.addBody(canBody);
-  const trashCan = { x: canX, z: canZ, r: canR, h: canH };
-  colliders.push({ minX: canX - canR, maxX: canX + canR, minZ: canZ - canR, maxZ: canZ + canR });
+  canShapes.push([new CANNON.Cylinder(canR - 0.01, canR - 0.01, 0.012, 12), new CANNON.Vec3(0, 0.006, 0), new CANNON.Quaternion()]);
+  const canProp = addProp('trashCan', canGroup, null, 0.9, canX, 0.001, canZ, { shapes: canShapes, sound: 'metal', linDamp: 0.15, angDamp: 0.5 });
+  const trashCan = { get x() { return canProp.body.position.x; }, get z() { return canProp.body.position.z; }, r: canR, h: canH, prop: canProp };
 
   // ---- Rolling chair
   const chair = new THREE.Group(); scene.add(chair);
@@ -335,28 +392,11 @@ export function buildRoom(scene, world) {
     wheel.position.set(Math.sin(a) * 0.29, 0.028, Math.cos(a) * 0.29); chair.add(wheel);
   }
   chair.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
-  const chairBody = new CANNON.Body({ mass: 0, type: CANNON.Body.KINEMATIC, material: physMat });
+  chair.userData.chair = true;
+  const chairBody = new CANNON.Body({ mass: 0, type: CANNON.Body.KINEMATIC, material: physMat, collisionFilterGroup: GROUP.PLAYER, collisionFilterMask: GROUP.PROP });
   chairBody.addShape(new CANNON.Box(new CANNON.Vec3(0.24, 0.04, 0.23)), new CANNON.Vec3(0, 0.48, 0));
   chairBody.addShape(new CANNON.Box(new CANNON.Vec3(0.22, 0.25, 0.035)), new CANNON.Vec3(0, 0.86, 0.22));
   world.addBody(chairBody);
-
-  // ---- Grabbable props
-  const p_damp = new Map(); // remembers each prop's normal spin damping (holding changes it)
-  function addProp(name, mesh, shape, mass, x, y, z, { sound = 'thunk', rot = null, linDamp = 0.05, angDamp = 0.2 } = {}) {
-    mesh.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
-    mesh.userData.prop = name;
-    scene.add(mesh);
-    const body = new CANNON.Body({ mass, material: physMat, linearDamping: linDamp, angularDamping: angDamp, allowSleep: true, sleepSpeedLimit: 0.05, sleepTimeLimit: 0.6 });
-    p_damp.set(body, angDamp);
-    body.addShape(shape);
-    body.position.set(x, y, z);
-    if (rot) body.quaternion.setFromEuler(...rot);
-    world.addBody(body);
-    const p = { name, mesh, body, sound };
-    body.userData = p;
-    props.push(p);
-    return p;
-  }
 
   // crumpled paper balls (the real crumple-and-toss task comes in Stage 2)
   const ballMat = std({ color: '#efece4', roughness: 1 });
@@ -429,6 +469,8 @@ export function buildRoom(scene, world) {
   mug.add(mugBody, mugBottom, coffee, handle);
   addProp('mug', mug, new CANNON.Cylinder(0.04, 0.04, 0.095, 12), 0.3, -0.8, DT + 0.05, -0.68, { sound: 'ceramic' });
 
-  props.forEach((p) => { p.angDamp = p_damp.get(p.body); });
-  return { props, colliders, chair, chairBody, clock: { hourHand, minHand, secHand, group: clock }, trashCan, physMat, detectorLed: ledMat, panels };
+  return {
+    props, colliders, chair, chairBody, clock: { hourHand, minHand, secHand, group: clock }, trashCan, physMat,
+    detectorLed: ledMat, panels, GROUP, impact, spawnSheet, mouseProp, mouseCord, dispensers: [stack],
+  };
 }

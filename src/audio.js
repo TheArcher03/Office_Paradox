@@ -65,9 +65,13 @@ export function impact(kind, speed) {
     case 'pencil': burst(0.03, 4200, 3, 0.25 * v + 0.04); ring(2400 + Math.random() * 400, 0.015 * v, 0.08); break;
     case 'heavy': burst(0.09, 700, 1.4, 0.5 * v + 0.06); break;
     case 'ceramic': burst(0.05, 1600, 2, 0.4 * v + 0.05); ring(1900, 0.04 * v, 0.25); ring(2870, 0.02 * v, 0.18); break;
+    case 'plastic': burst(0.04, 2200, 1.6, 0.3 * v + 0.04); burst(0.05, 600, 1.2, 0.15 * v); break;
+    case 'metal': burst(0.05, 1300, 3, 0.3 * v + 0.05); ring(880 + Math.random() * 60, 0.03 * v, 0.35); ring(1410, 0.015 * v, 0.25); break;
     default: burst(0.06, 900, 1, 0.3 * v);
   }
 }
 
+export function bump() { burst(0.12, 300, 0.8, 0.5); burst(0.05, 1200, 2, 0.15); }
+export function peel() { burst(0.09, 3200, 0.7, 0.07); }
 export function whoosh(strength) { burst(0.22, 900 + strength * 700, 0.6, 0.06 + strength * 0.08); }
 export function chairRoll(speed) { if (speed > 0.15 && Math.random() < 0.25) burst(0.08, 260, 0.9, Math.min(0.08, speed * 0.05)); }

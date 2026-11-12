@@ -23,6 +23,7 @@ A gray office cubicle with no task list. Do something creative and the world qui
 - `npm install` → `npm run dev` (play locally at the printed URL) → `npm run build` → `dist/index.html` (open it in a browser to play, or share it).
 - Code layout: `src/main.js` (loop, player, grab/throw, camera, HUD) · `src/room.js` (cubicle, props, colliders) · `src/textures.js` (canvas-drawn placeholder textures) · `src/grayFilter.js` (the gray/grain look) · `src/audio.js` (placeholder sound made in code).
 - Tuning knobs live at the top of `src/main.js` (`TUNE`). Press ` in game for the color slider.
+- Controls: E sit/stand · C kneel → crawl · Space stand up · click grab / drop · hold click + pull back + flick up to throw · right-click inspect.
 - `window.__op` exposes test hooks for automated browser checks (headless Chromium + screenshots). Keep them working.
 
 ## Pushing to GitHub
