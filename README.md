@@ -5,6 +5,9 @@ A Twofold Productions prototype. You're in a gray office cubicle. Nobody tells y
 **Status:** Stage 1 of the prototype, *The Box*: the cubicle, first-person controls, the rolling chair, and grab / inspect / throw physics.
 
 ## Play it
+**Online:** https://thearcher03.github.io/Office_Paradox/ (updates on every push to `main`)
+
+**Locally:**
 ```
 npm install
 npm run dev      # play in your browser at the printed address

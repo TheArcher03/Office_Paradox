@@ -25,6 +25,11 @@ A gray office cubicle with no task list. Do something creative and the world qui
 - Tuning knobs live at the top of `src/main.js` (`TUNE`). Press ` in game for the color slider.
 - `window.__op` exposes test hooks for automated browser checks (headless Chromium + screenshots). Keep them working.
 
+## Pushing to GitHub
+- Repo: `TheArcher03/Office_Paradox`. Remote: `git@github.com:TheArcher03/Office_Paradox.git` (SSH, same setup as Tavern Tales).
+- Pushes work from Noah's Mac (his SSH key is registered with GitHub). A cloud Claude session can only push if GitHub is linked under claude.ai → Customize → Connectors.
+- Every push to `main` deploys the game to GitHub Pages: https://thearcher03.github.io/Office_Paradox/
+
 ## How we work
 - Build in small playable steps; every stage ends with something the brothers can play.
 - Commit after every working step with a clear message.
