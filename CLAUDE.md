@@ -21,9 +21,10 @@ A gray office cubicle with no task list. Do something creative and the world qui
 ## Tech
 - Three.js (3D) + cannon-es (physics), bundled with Vite into **one self-contained file**.
 - `npm install` → `npm run dev` (play locally at the printed URL) → `npm run build` → `dist/index.html` (open it in a browser to play, or share it).
-- Code layout: `src/main.js` (loop, player, grab/throw, camera, HUD) · `src/room.js` (cubicle, props, colliders) · `src/textures.js` (canvas-drawn placeholder textures) · `src/grayFilter.js` (the gray/grain look) · `src/audio.js` (placeholder sound made in code).
-- Tuning knobs live at the top of `src/main.js` (`TUNE`). Press ` in game for the color slider.
-- Controls: E sit/stand · C kneel → crawl · Space stand up · click grab / drop · hold click + pull back + flick up to throw · right-click inspect.
+- Code layout: `src/main.js` (loop, seated player, pick up / crumple / toss, camera) · `src/room.js` (cubicle, props, colliders) · `src/textures.js` (canvas-drawn placeholder textures) · `src/grayFilter.js` (the gray/grain look) · `src/audio.js` (placeholder sound made in code).
+- Tuning knobs live at the top of `src/main.js` (`TUNE`). Press ` in game for the color slider, throw strength and Reset the room.
+- Controls (v4, seated pass): the chair is locked in place and you spin 360° with the mouse. Click = use your hands: pick up paper → crumple a flat sheet → toss the ball where you're looking. Right-click / F puts it down. Only loose paper can be picked up; everything else is fixed.
+- Held paper is pinned to the camera (low right of the view), not steered by physics. Loose props are drawn from the physics engine's interpolated positions so motion stays smooth on 120 Hz screens. Keep both.
 - `window.__op` exposes test hooks for automated browser checks (headless Chromium + screenshots). Keep them working.
 
 ## Pushing to GitHub

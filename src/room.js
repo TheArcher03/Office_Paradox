@@ -1,4 +1,4 @@
-// The cubicle: static furniture, physics colliders and the grabbable props.
+// The cubicle: static furniture, physics colliders and the props. Only loose paper can be picked up (for now).
 // Units are meters. The desk sits against the back wall (-Z). The player starts seated, facing -Z.
 import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
@@ -63,7 +63,8 @@ export function buildRoom(scene, world) {
   const GROUP = { WORLD: 1, PROP: 2, PLAYER: 4 };
   const impact = { fn: null };
   // stuck = held in place (taped/pinned) until the player grabs it, then it becomes a normal physics object
-  function addProp(name, mesh, shape, mass, x, y, z, { sound = 'thunk', rot = null, quat = null, linDamp = 0.05, angDamp = 0.2, offset = null, shapes = null, stuck = false } = {}) {
+  function addProp(name, mesh, shape, mass, x, y, z, { sound = 'thunk', rot = null, quat = null, linDamp = 0.05, angDamp = 0.2, offset = null, shapes = null, stuck = false, grab = false, kind = null } = {}) {
+    const fixed = stuck || !grab;   // only loose paper moves; the rest of the cubicle stays put
     mesh.traverse((o) => {
       if (!o.isMesh) return;
       o.castShadow = true; o.receiveShadow = true;
@@ -72,9 +73,9 @@ export function buildRoom(scene, world) {
     mesh.userData.prop = name;
     scene.add(mesh);
     const body = new CANNON.Body({
-      mass: stuck ? 0 : mass, type: stuck ? CANNON.Body.STATIC : CANNON.Body.DYNAMIC, material: physMat,
+      mass: fixed ? 0 : mass, type: fixed ? CANNON.Body.STATIC : CANNON.Body.DYNAMIC, material: physMat,
       linearDamping: linDamp, angularDamping: angDamp, allowSleep: true, sleepSpeedLimit: 0.05, sleepTimeLimit: 0.6,
-      collisionFilterGroup: GROUP.PROP, collisionFilterMask: GROUP.WORLD | GROUP.PROP | GROUP.PLAYER,
+      collisionFilterGroup: GROUP.PROP, collisionFilterMask: GROUP.WORLD | GROUP.PROP,
     });
     if (shape) body.addShape(shape, offset || undefined);
     if (shapes) shapes.forEach(([sh, o, q]) => body.addShape(sh, o, q));
@@ -82,12 +83,16 @@ export function buildRoom(scene, world) {
     if (rot) body.quaternion.setFromEuler(...rot);
     if (quat) body.quaternion.set(quat.x, quat.y, quat.z, quat.w);
     world.addBody(body);
-    const p = { name, mesh, body, sound, mass, angDamp, stuck };
+    const p = { name, mesh, body, sound, mass, angDamp, stuck, grab: grab && !stuck, kind };
     body.userData = p;
     body.addEventListener('collide', (e) => impact.fn && impact.fn(p, e));
     mesh.position.copy(body.position); mesh.quaternion.copy(body.quaternion);
     props.push(p);
     return p;
+  }
+  function removeProp(p) {
+    scene.remove(p.mesh); world.removeBody(p.body);
+    const i = props.indexOf(p); if (i >= 0) props.splice(i, 1);
   }
   // a single sheet of paper: light, floaty, and it can lie flat or be pinned to a wall
   const sheetTex = { spreadsheet: T.spreadsheet(), memo: T.paper(true), blank: T.paper(false) };
@@ -96,7 +101,47 @@ export function buildRoom(scene, world) {
     const face = std({ map: sheetTex[kind], roughness: 0.95 });
     const m = new THREE.Mesh(new THREE.BoxGeometry(0.215, 0.002, 0.28), [sheetEdge, sheetEdge, face, face, sheetEdge, sheetEdge]);
     return addProp(kind === 'memo' ? 'memo' : 'sheet', m, new CANNON.Box(new CANNON.Vec3(0.1075, 0.003, 0.14)), 0.006, x, y, z,
-      { sound: 'paper', linDamp: 0.55, angDamp: 0.6, ...opts });
+      { sound: 'paper', linDamp: 0.55, angDamp: 0.6, grab: true, kind, ...opts });
+  }
+  // A sheet being crumpled in your hands: set(0) is the flat sheet, set(1) is a tight paper ball.
+  // The finished mesh becomes the ball itself, so the ball you made still shows what was printed on it.
+  const BALL_R = 0.036;
+  function makeCrumple(kind) {
+    const NX = 8, NZ = 10;
+    const g = new THREE.PlaneGeometry(0.215, 0.28, NX, NZ);
+    g.rotateX(-Math.PI / 2);
+    const pos = g.attributes.position;
+    const flat = Float32Array.from(pos.array);
+    const mid = new Float32Array(flat.length), ball = new Float32Array(flat.length);
+    for (let i = 0; i < pos.count; i++) {
+      const x = flat[i * 3], z = flat[i * 3 + 2];
+      // done: the sheet wrapped around into a lumpy ball
+      const u = x / 0.215 + 0.5, w = z / 0.28 + 0.5;
+      const th = u * Math.PI * 2, ph = 0.25 + w * (Math.PI - 0.5);
+      const r = BALL_R * (0.84 + Math.random() * 0.28);
+      const bx = r * Math.sin(ph) * Math.cos(th), by = r * Math.cos(ph), bz = r * Math.sin(ph) * Math.sin(th);
+      ball[i * 3] = bx; ball[i * 3 + 1] = by; ball[i * 3 + 2] = bz;
+      // halfway: a scrunched, wrinkled sheet closing in on itself
+      mid[i * 3] = (x * 0.5 + bx) * 0.75 + (Math.random() - 0.5) * 0.012;
+      mid[i * 3 + 1] = by * 0.8 + (Math.random() - 0.5) * 0.02;
+      mid[i * 3 + 2] = (z * 0.45 + bz) * 0.75 + (Math.random() - 0.5) * 0.012;
+    }
+    const mesh = new THREE.Mesh(g, std({ map: sheetTex[kind] || sheetTex.blank, roughness: 1, side: THREE.DoubleSide, flatShading: true }));
+    mesh.castShadow = true;
+    const set = (t) => {
+      t = THREE.MathUtils.clamp(t, 0, 1);
+      const a = pos.array;
+      for (let i = 0; i < a.length; i++) {
+        a[i] = t < 0.5 ? flat[i] + (mid[i] - flat[i]) * (t * 2) : mid[i] + (ball[i] - mid[i]) * (t * 2 - 1);
+      }
+      pos.needsUpdate = true;
+      if (t >= 1) g.computeBoundingSphere();
+    };
+    return { mesh, set };
+  }
+  // paper is light and lumpy: lots of air drag, and it stops rolling quickly
+  function addBall(mesh, x, y, z) {
+    return addProp('paperBall', mesh, new CANNON.Sphere(BALL_R), 0.012, x, y, z, { sound: 'paper', linDamp: 0.12, angDamp: 0.75, grab: true });
   }
   // orientation for something flat stuck to a wall, face out, with a small tilt
   function wallQuat(wall, tilt = 0) {
@@ -305,8 +350,9 @@ export function buildRoom(scene, world) {
   const stackX = -0.78, stackZ = -0.98;
   const stack = new THREE.Group(); stack.position.set(stackX, DT, stackZ); scene.add(stack);
   stack.userData.dispenser = 'sheet';   // click it to pull a sheet off the top
+  const stackMat = paperMat.clone();
   for (let i = 0; i < 14; i++) {
-    const s = new THREE.Mesh(new THREE.BoxGeometry(0.215, 0.004, 0.28), paperMat);
+    const s = new THREE.Mesh(new THREE.BoxGeometry(0.215, 0.004, 0.28), stackMat);
     s.position.set((Math.random() - 0.5) * 0.012, 0.002 + i * 0.0042, (Math.random() - 0.5) * 0.012);
     s.rotation.y = (Math.random() - 0.5) * 0.06; s.castShadow = true; s.receiveShadow = true; stack.add(s);
   }
@@ -350,8 +396,8 @@ export function buildRoom(scene, world) {
   glass.position.z = 0.034; clock.add(glass);
 
   // ---- Wire mesh trash can (hollow, so things can land in it)
-  // tucked at the desk's front-left corner: still "by the desk", but the opening is reachable for a shot
-  const canX = -1.08, canZ = -0.39, canR = 0.155, canH = 0.33;
+  // in the back-left corner (behind you on the left as you face the desk), out in the open: spin the chair to see it
+  const canX = -1.1, canZ = 1.1, canR = 0.155, canH = 0.33;
   const meshTex = T.wireMesh();
   const canGroup = new THREE.Group();
   const can = new THREE.Mesh(new THREE.CylinderGeometry(canR + 0.015, canR - 0.02, canH, 28, 1, true),
@@ -398,7 +444,7 @@ export function buildRoom(scene, world) {
   chairBody.addShape(new CANNON.Box(new CANNON.Vec3(0.22, 0.25, 0.035)), new CANNON.Vec3(0, 0.86, 0.22));
   world.addBody(chairBody);
 
-  // crumpled paper balls (the real crumple-and-toss task comes in Stage 2)
+  // a couple of paper balls someone already crumpled
   const ballMat = std({ color: '#efece4', roughness: 1 });
   function crumpleGeo(r) {
     // merge shared corners first so the dents don't tear the surface apart
@@ -418,8 +464,7 @@ export function buildRoom(scene, world) {
   [[-0.6, -0.8], [-0.56, -0.66]].forEach(([x, z], i) => {
     const m = new THREE.Mesh(crumpleGeo(0.038), ballMat);
     m.material = ballMat.clone(); m.material.flatShading = true;
-    // paper is light and lumpy: lots of air drag, and it stops rolling quickly
-    addProp('paperBall', m, new CANNON.Sphere(0.036), 0.012, x, DT + 0.04, z, { sound: 'paper', linDamp: 0.12, angDamp: 0.75 });
+    addBall(m, x, DT + 0.04, z);
   });
 
   // pencils (in a cup)
@@ -471,6 +516,6 @@ export function buildRoom(scene, world) {
 
   return {
     props, colliders, chair, chairBody, clock: { hourHand, minHand, secHand, group: clock }, trashCan, physMat,
-    detectorLed: ledMat, panels, GROUP, impact, spawnSheet, mouseProp, mouseCord, dispensers: [stack],
+    detectorLed: ledMat, panels, GROUP, impact, spawnSheet, dispensers: [stack], makeCrumple, addBall, removeProp, stackTop: new THREE.Vector3(stackX, DT + 0.07, stackZ),
   };
 }
