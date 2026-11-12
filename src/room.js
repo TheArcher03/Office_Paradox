@@ -5,7 +5,7 @@ import * as CANNON from 'cannon-es';
 import * as T from './textures.js';
 import { mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 
-export const ROOM = { half: 1.25, wallH: 2.6, wallT: 0.06, deskTop: 0.74 };
+export const ROOM = { half: 1.35, wallH: 2.6, wallT: 0.06, deskTop: 0.74, ceilingY: 3.2 };
 
 const std = (o) => new THREE.MeshStandardMaterial({ roughness: 0.85, metalness: 0.0, ...o });
 
@@ -13,6 +13,7 @@ export function buildRoom(scene, world) {
   const props = [];      // { name, mesh, body, sound }
   const colliders = [];  // XZ rectangles the player can't walk through
   const H = ROOM.half;
+  const DT = ROOM.deskTop;
 
   const physMat = new CANNON.Material('default');
 
@@ -31,18 +32,44 @@ export function buildRoom(scene, world) {
     }
     return mesh;
   }
+  function staticCollider(hx, hy, hz, x, y, z) {
+    const body = new CANNON.Body({ mass: 0, material: physMat });
+    body.addShape(new CANNON.Box(new CANNON.Vec3(hx, hy, hz)));
+    body.position.set(x, y, z); world.addBody(body);
+  }
+  // a flat picture/paper hung on a wall. wall: 'back' (-Z), 'front' (+Z), 'left' (-X), 'right' (+X)
+  function wallPlane(w, h, map, wall, a, y, { tilt = 0, inset = 0.004, mat = null } = {}) {
+    const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), mat || std({ map, roughness: 0.9 }));
+    if (wall === 'back') { m.position.set(a, y, -H + inset); }
+    if (wall === 'front') { m.position.set(a, y, H - inset); m.rotation.y = Math.PI; }
+    if (wall === 'left') { m.position.set(-H + inset, y, a); m.rotation.y = Math.PI / 2; }
+    if (wall === 'right') { m.position.set(H - inset, y, a); m.rotation.y = -Math.PI / 2; }
+    m.rotation.z = tilt; m.receiveShadow = true; scene.add(m);
+    return m;
+  }
+  const pinMat = std({ color: '#c0392b', roughness: 0.4 });
+  function pin(wall, a, y) {
+    const p = new THREE.Mesh(new THREE.SphereGeometry(0.008, 8, 6), pinMat);
+    const o = 0.01;
+    if (wall === 'back') p.position.set(a, y, -H + o);
+    if (wall === 'front') p.position.set(a, y, H - o);
+    if (wall === 'left') p.position.set(-H + o, y, a);
+    if (wall === 'right') p.position.set(H - o, y, a);
+    scene.add(p);
+  }
 
   // ---- Floor
-  const floor = new THREE.Mesh(new THREE.PlaneGeometry(2 * H + 0.2, 2 * H + 0.2), std({ map: T.carpet(), roughness: 1 }));
+  const floor = new THREE.Mesh(new THREE.PlaneGeometry(12, 12), std({ map: T.carpet(), roughness: 1 }));
+  floor.material.map.repeat.set(28, 28);
   floor.rotation.x = -Math.PI / 2; floor.receiveShadow = true; scene.add(floor);
   const floorBody = new CANNON.Body({ mass: 0, material: physMat });
   floorBody.addShape(new CANNON.Plane());
   floorBody.quaternion.setFromEuler(-Math.PI / 2, 0, 0);
   world.addBody(floorBody);
 
-  // ---- Walls (tall, fabric-covered, no way out, no ceiling)
+  // ---- Walls: fabric cubicle panels with metal trim and panel seams. Too tall to see over, and no way out.
   const wallMat = std({ map: T.fabric(), roughness: 1 });
-  const trimMat = std({ color: '#8a8d90', roughness: 0.6, metalness: 0.3 });
+  const trimMat = std({ color: '#9a9c98', roughness: 0.5, metalness: 0.4 });
   const { wallH: WH, wallT: WT } = ROOM;
   const walls = [
     [2 * H + 2 * WT, WH, WT, 0, WH / 2, -H - WT / 2],
@@ -52,70 +79,176 @@ export function buildRoom(scene, world) {
   ];
   walls.forEach(([w, h, d, x, y, z]) => {
     staticBox(w, h, d, x, y, z, wallMat, { shadow: false });
-    staticBox(w + 0.02, 0.04, d + 0.02, x, WH + 0.02, z, trimMat, { collide: false });
+    staticBox(w + 0.03, 0.05, d + 0.03, x, WH + 0.025, z, trimMat, { collide: false });
   });
-  // physics lid so nothing escapes over the wall (invisible)
-  const lid = new CANNON.Body({ mass: 0, material: physMat });
-  lid.addShape(new CANNON.Box(new CANNON.Vec3(H + 1, 0.05, H + 1)));
-  lid.position.set(0, 6, 0);
-  world.addBody(lid);
+  // vertical seams where the panels meet, plus a kick strip at the floor
+  [-0.45, 0.45].forEach((a) => {
+    staticBox(0.025, WH, 0.012, a, WH / 2, -H + 0.006, trimMat, { collide: false, shadow: false });
+    staticBox(0.025, WH, 0.012, a, WH / 2, H - 0.006, trimMat, { collide: false, shadow: false });
+    staticBox(0.012, WH, 0.025, -H + 0.006, WH / 2, a, trimMat, { collide: false, shadow: false });
+    staticBox(0.012, WH, 0.025, H - 0.006, WH / 2, a, trimMat, { collide: false, shadow: false });
+  });
+  const kick = std({ color: '#55585a', roughness: 0.6 });
+  staticBox(2 * H, 0.08, 0.01, 0, 0.04, H - 0.005, kick, { collide: false, shadow: false });
+  staticBox(0.01, 0.08, 2 * H, -H + 0.005, 0.04, 0, kick, { collide: false, shadow: false });
+  // physics lid just under the ceiling so nothing escapes over the walls (invisible)
+  staticCollider(H + 1, 0.05, H + 1, 0, ROOM.ceilingY - 0.05, 0);
 
-  // ---- Desk
+  // ---- Drop ceiling: acoustic tiles, fluorescent panels, an air vent and a "smoke detector"
+  const CY = ROOM.ceilingY;
+  const ceilTex = T.ceilingTiles(); ceilTex.repeat.set(20, 20); ceilTex.offset.set(0.5, 0.5);
+  const ceiling = new THREE.Mesh(new THREE.PlaneGeometry(12, 12), std({ map: ceilTex, roughness: 1, emissive: '#2a2a28', emissiveMap: ceilTex, emissiveIntensity: 0.6 }));
+  ceiling.rotation.x = Math.PI / 2; ceiling.position.y = CY; scene.add(ceiling);
+  const lightPanelMat = new THREE.MeshStandardMaterial({ color: '#ffffff', emissive: '#f3f6ff', emissiveIntensity: 1.35, roughness: 0.3 });
+  const panelFrame = std({ color: '#cfcfca', roughness: 0.5, metalness: 0.3 });
+  const panels = [];
+  for (const x of [-3.3, 0.3, 3.9]) for (const z of [-3.6, 0.0, 3.6]) {
+    const p = new THREE.Mesh(new THREE.BoxGeometry(0.56, 0.015, 1.16), lightPanelMat);
+    p.position.set(x, CY - 0.008, z); scene.add(p); panels.push(p);
+    for (const dz of [-0.4, 0, 0.4]) {
+      const louver = new THREE.Mesh(new THREE.BoxGeometry(0.56, 0.02, 0.012), panelFrame);
+      louver.position.set(x, CY - 0.02, z + dz); scene.add(louver);
+    }
+  }
+  const vent = new THREE.Group(); vent.position.set(-0.9, CY - 0.01, 0.9); scene.add(vent);
+  const ventFace = new THREE.Mesh(new THREE.BoxGeometry(0.56, 0.015, 0.56), std({ color: '#b9b9b4', roughness: 0.6, metalness: 0.2 }));
+  vent.add(ventFace);
+  for (let i = -3; i <= 3; i++) {
+    const slat = new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.012, 0.02), std({ color: '#5e5e5a' }));
+    slat.position.set(0, -0.012, i * 0.065); vent.add(slat);
+  }
+  const detector = new THREE.Group(); detector.position.set(-0.25, CY, -0.55); scene.add(detector);
+  const dome = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.07, 0.035, 24), std({ color: '#ecebe6', roughness: 0.5 }));
+  dome.position.y = -0.02; detector.add(dome);
+  const ledMat = new THREE.MeshStandardMaterial({ color: '#400', emissive: '#ff2a1a', emissiveIntensity: 0 });
+  const led = new THREE.Mesh(new THREE.SphereGeometry(0.006, 8, 6), ledMat);
+  led.position.set(0.035, -0.04, 0); detector.add(led);
+
+  // ---- L-shaped corner desk: along the back wall, then down the right wall
   const deskMat = std({ map: T.laminate(), roughness: 0.55 });
-  const panelMat = std({ color: '#7d7a72', roughness: 0.8 });
-  const DT = ROOM.deskTop;
-  const deskX0 = -H, deskX1 = 0.6, deskZ0 = -H, deskZ1 = -0.47;
-  const deskW = deskX1 - deskX0, deskD = deskZ1 - deskZ0;
-  const deskCX = (deskX0 + deskX1) / 2, deskCZ = (deskZ0 + deskZ1) / 2;
-  staticBox(deskW, 0.035, deskD, deskCX, DT - 0.0175, deskCZ, deskMat);
-  staticBox(0.025, DT - 0.035, deskD, deskX0 + 0.0125, (DT - 0.035) / 2, deskCZ, panelMat);
-  staticBox(0.025, DT - 0.035, deskD, deskX1 - 0.0125, (DT - 0.035) / 2, deskCZ, panelMat);
-  staticBox(deskW - 0.05, 0.42, 0.02, deskCX, DT - 0.25, deskZ0 + 0.02, panelMat, { collide: false });
-  // a drawer unit under the right side of the desk
-  staticBox(0.4, 0.5, deskD - 0.05, deskX1 - 0.23, 0.25 + 0.01, deskCZ, panelMat);
-  [0.1, 0.27, 0.42].forEach((y) => staticBox(0.12, 0.015, 0.015, deskX1 - 0.23, y, deskZ1 - 0.02, trimMat, { collide: false }));
-  colliders.push({ minX: deskX0, maxX: deskX1, minZ: deskZ0, maxZ: deskZ1, desk: true });
+  const edgeMat = std({ color: '#4a4440', roughness: 0.5 });
+  const panelMat = std({ color: '#86847c', roughness: 0.8 });
+  const backZ1 = -0.55;                  // front edge of the back desk
+  const retX0 = 0.6, retZ1 = 0.5;        // inner edge + far end of the return
+  // back run
+  staticBox(2 * H, 0.035, H + backZ1, 0, DT - 0.0175, (-H + backZ1) / 2, deskMat);
+  staticBox(retX0 + H, 0.035, 0.012, (-H + retX0) / 2, DT - 0.0175, backZ1 + 0.006, edgeMat, { collide: false });
+  // return
+  staticBox(H - retX0, 0.035, retZ1 - backZ1, (retX0 + H) / 2, DT - 0.0175, (backZ1 + retZ1) / 2, deskMat);
+  staticBox(0.012, 0.035, retZ1 - backZ1, retX0 - 0.006, DT - 0.0175, (backZ1 + retZ1) / 2, edgeMat, { collide: false });
+  staticBox(H - retX0, 0.035, 0.012, (retX0 + H) / 2, DT - 0.0175, retZ1 + 0.006, edgeMat, { collide: false });
+  // supports: left end panel, return end panel, modesty panel at the back
+  staticBox(0.025, DT - 0.035, H + backZ1, -H + 0.0125, (DT - 0.035) / 2, (-H + backZ1) / 2, panelMat);
+  staticBox(H - retX0, DT - 0.035, 0.025, (retX0 + H) / 2, (DT - 0.035) / 2, retZ1 - 0.0125, panelMat);
+  staticBox(2 * H - 0.05, 0.42, 0.02, 0, DT - 0.25, -H + 0.02, panelMat, { collide: false });
+  // drawer pedestal under the end of the return
+  const pedX = (retX0 + H) / 2 + 0.03, pedZ = retZ1 - 0.25;
+  staticBox(H - retX0 - 0.08, 0.66, 0.42, pedX, 0.33 + 0.01, pedZ, panelMat);
+  [0.12, 0.33, 0.54].forEach((y) => staticBox(0.015, 0.015, 0.14, retX0 + 0.065, y, pedZ, trimMat, { collide: false }));
+  colliders.push({ minX: -H, maxX: H, minZ: -H, maxZ: backZ1, desk: true });
+  colliders.push({ minX: retX0, maxX: H, minZ: backZ1, maxZ: retZ1, desk: true });
 
-  // ---- Filing cabinet + printer (right of the desk)
-  const beige = std({ color: '#cfc8b4', roughness: 0.6 });
-  const cabX = 0.95, cabZ = -0.97;
-  staticBox(0.52, 0.7, 0.52, cabX, 0.35, cabZ, std({ color: '#8f9294', roughness: 0.5, metalness: 0.35 }));
-  [0.2, 0.52].forEach((y) => staticBox(0.16, 0.02, 0.02, cabX, y, cabZ + 0.27, trimMat, { collide: false }));
-  const printer = staticBox(0.46, 0.2, 0.4, cabX, 0.7 + 0.1, cabZ - 0.02, beige);
-  staticBox(0.3, 0.02, 0.14, cabX, 0.82, cabZ + 0.24, beige, { collide: false }); // output tray
-  staticBox(0.08, 0.025, 0.06, cabX + 0.15, 0.91, cabZ + 0.12, std({ color: '#4a4f52' }), { collide: false }); // button panel
-  printer.name = 'printer';
-  colliders.push({ minX: cabX - 0.27, maxX: H, minZ: -H, maxZ: cabZ + 0.27 });
+  // ---- Hutch shelf above the back desk, with binders
+  const shelfX0 = -H + 0.02, shelfX1 = 0.15, shelfY = 1.48, shelfD = 0.28;
+  const shelfCX = (shelfX0 + shelfX1) / 2, shelfCZ = -H + shelfD / 2;
+  staticBox(shelfX1 - shelfX0, 0.025, shelfD, shelfCX, shelfY, shelfCZ, deskMat);
+  [shelfX0 + 0.2, shelfX1 - 0.2].forEach((x) => {
+    staticBox(0.02, 0.16, 0.02, x, shelfY - 0.09, -H + 0.012, trimMat, { collide: false });
+    staticBox(0.02, 0.02, shelfD - 0.03, x, shelfY - 0.023, shelfCZ - 0.01, trimMat, { collide: false });
+  });
+  const binderColors = ['#2f5d8a', '#2f5d8a', '#3e7a4f', '#8f2f2f', '#d8d4c8', '#2f5d8a', '#c9a23a', '#3e7a4f', '#4b3f6b', '#8f2f2f', '#d8d4c8'];
+  let bx = shelfX0 + 0.04;
+  binderColors.forEach((col, i) => {
+    const w = 0.045 + (i % 3) * 0.012;
+    const hgt = 0.29 - (i % 4 === 3 ? 0.04 : 0);
+    const spine = T.binderSpine(col, col !== '#d8d4c8');
+    const mats = [std({ color: col }), std({ color: col }), std({ color: col }), std({ color: col }), std({ map: spine, roughness: 0.7 }), std({ color: col })];
+    const b = new THREE.Mesh(new THREE.BoxGeometry(w, hgt, 0.25), mats);
+    b.position.set(bx + w / 2, shelfY + 0.0125 + hgt / 2, -H + 0.145);
+    b.rotation.z = i === binderColors.length - 1 ? -0.18 : 0;
+    b.castShadow = true; b.receiveShadow = true; scene.add(b);
+    bx += w + 0.004;
+  });
+  staticCollider((bx - shelfX0) / 2, 0.15, 0.125, (shelfX0 + bx) / 2, shelfY + 0.16, -H + 0.145);
+  // a box file lying flat at the end of the shelf; the open space next to it is where something new might appear one day
+  staticBox(0.3, 0.09, 0.24, shelfX1 - 0.2, shelfY + 0.0575, -H + 0.14, std({ color: '#c8b89a', roughness: 0.9 }));
 
-  // ---- Paper shredder (floor, front of the cabinet)
-  const shredX = 1.0, shredZ = -0.47;
+  // ---- Computer on the back desk: deep beige CRT, keyboard, mousepad + mouse, tower under the desk
+  const beige = std({ color: '#d2cab3', roughness: 0.6 });
+  const monX = -0.25, monFront = -0.8;
+  const monY = DT + 0.04 + 0.2;
+  staticBox(0.26, 0.04, 0.24, monX, DT + 0.02, monFront - 0.16, beige);                     // swivel base
+  staticBox(0.44, 0.38, 0.05, monX, monY, monFront - 0.025, beige);                          // bezel
+  staticBox(0.4, 0.34, 0.2, monX, monY, monFront - 0.15, beige);                             // body
+  const crtBack = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.24, 0.22, 4, 1), beige);  // tapered tube housing
+  crtBack.rotation.x = -Math.PI / 2; crtBack.rotation.y = Math.PI / 4;
+  crtBack.position.set(monX, monY - 0.01, monFront - 0.36); crtBack.castShadow = true; scene.add(crtBack);
+  staticCollider(0.14, 0.12, 0.11, monX, monY - 0.01, monFront - 0.36);
+  const screen = new THREE.Mesh(new THREE.PlaneGeometry(0.34, 0.265), std({ map: T.crtScreen(), roughness: 0.15, metalness: 0.1 }));
+  screen.position.set(monX, monY + 0.01, monFront + 0.001); scene.add(screen);
+  screen.name = 'crtScreen';
+  const powerLed = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.006, 0.004), std({ color: '#1a3', emissive: '#1a3', emissiveIntensity: 0.6 }));
+  powerLed.position.set(monX + 0.17, monY - 0.165, monFront + 0.002); scene.add(powerLed);
+  // sticky notes on the monitor bezel
+  [[monX + 0.2, monY + 0.15, 0.12, 0], [monX - 0.21, monY - 0.12, -0.09, 1]].forEach(([x, y, r, k]) => {
+    const n = new THREE.Mesh(new THREE.PlaneGeometry(0.065, 0.065), std({ map: T.stickyNote(k), roughness: 0.9, side: THREE.DoubleSide }));
+    n.position.set(x, y, monFront + 0.003); n.rotation.z = r; scene.add(n);
+  });
+  const kb = new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.025, 0.16), std({ map: T.keyboard(), roughness: 0.6 }));
+  kb.position.set(monX, DT + 0.013, -0.67); kb.rotation.x = -0.05; kb.castShadow = true; kb.receiveShadow = true; scene.add(kb);
+  staticCollider(0.23, 0.0125, 0.08, monX, DT + 0.013, -0.67);
+  const pad = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.004, 0.18), std({ color: '#2d5876', roughness: 0.95 }));
+  pad.position.set(0.12, DT + 0.002, -0.68); pad.receiveShadow = true; scene.add(pad);
+  const mouse = new THREE.Mesh(new THREE.CapsuleGeometry(0.028, 0.04, 4, 10), beige);
+  mouse.rotation.x = Math.PI / 2; mouse.scale.set(1, 1, 0.55); mouse.position.set(0.12, DT + 0.019, -0.67); mouse.castShadow = true; scene.add(mouse);
+  const cordMat = std({ color: '#bdb6a0' });
+  scene.add(new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3([
+    new THREE.Vector3(0.12, DT + 0.012, -0.71), new THREE.Vector3(0.14, DT + 0.006, -0.85), new THREE.Vector3(0.02, DT + 0.005, -1.05), new THREE.Vector3(-0.1, DT + 0.005, -1.2)]), 20, 0.004, 5), cordMat));
+  staticBox(0.2, 0.42, 0.45, 0.28, 0.21, -1.05, beige); // tower under the desk
+  staticBox(0.12, 0.012, 0.004, 0.28, 0.33, -0.824, std({ color: '#333' }), { collide: false }); // floppy slot
+
+  // ---- Desk phone on the return, near the corner
+  const phone = new THREE.Group(); phone.position.set(0.98, DT, -0.32); phone.rotation.y = Math.PI / 2; scene.add(phone);
+  const phoneMat = std({ color: '#2a2b2d', roughness: 0.45 });
+  const pBase = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.05, 0.22), phoneMat); pBase.position.y = 0.025; phone.add(pBase);
+  const pKeys = new THREE.Mesh(new THREE.PlaneGeometry(0.12, 0.12), std({ map: T.phoneKeypad(), roughness: 0.5 }));
+  pKeys.rotation.x = -Math.PI / 2 + 0.15; pKeys.position.set(0.02, 0.052, 0.05); phone.add(pKeys);
+  const handset = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.035, 0.22), phoneMat); handset.position.set(-0.07, 0.07, -0.01); phone.add(handset);
+  [-0.09, 0.07].forEach((z) => { const cup = new THREE.Mesh(new THREE.BoxGeometry(0.065, 0.045, 0.06), phoneMat); cup.position.set(-0.07, 0.065, z); phone.add(cup); });
+  const coil = []; for (let i = 0; i <= 80; i++) { const t = i / 80; coil.push(new THREE.Vector3(-0.1 - 0.03 * Math.sin(t * Math.PI) + 0.012 * Math.cos(t * 50), 0.015 + 0.012 * Math.sin(t * 50), -0.12 + 0.2 * t)); }
+  const coilMesh = new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(coil), 240, 0.003, 4), phoneMat); phone.add(coilMesh);
+  phone.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+  staticCollider(0.11, 0.05, 0.12, 0.98, DT + 0.05, -0.32);
+
+  // ---- Printer on the far end of the return
+  const prX = 1.0, prZ = 0.2;
+  staticBox(0.42, 0.2, 0.46, prX, DT + 0.1, prZ, beige);
+  staticBox(0.12, 0.02, 0.3, prX - 0.27, DT + 0.03, prZ, beige, { collide: false }); // output tray (faces you)
+  staticBox(0.2, 0.004, 0.27, prX - 0.27, DT + 0.042, prZ, std({ map: T.paper(false) }), { collide: false });
+  staticBox(0.05, 0.025, 0.09, prX - 0.12, DT + 0.21, prZ + 0.14, std({ color: '#4a4f52' }), { collide: false }); // buttons
+
+  // ---- Paper shredder on the floor beside the return
+  const shredX = 1.07, shredZ = 0.82;
   staticBox(0.3, 0.5, 0.24, shredX, 0.25, shredZ, std({ color: '#3c3f42', roughness: 0.5 }));
   staticBox(0.31, 0.08, 0.25, shredX, 0.54, shredZ, std({ color: '#26282a', roughness: 0.4 }));
-  staticBox(0.22, 0.006, 0.012, shredX, 0.583, shredZ, std({ color: '#050505' }), { collide: false }); // slot
+  staticBox(0.22, 0.006, 0.012, shredX, 0.583, shredZ, std({ color: '#050505' }), { collide: false });
   colliders.push({ minX: shredX - 0.15, maxX: shredX + 0.15, minZ: shredZ - 0.12, maxZ: shredZ + 0.12 });
 
-  // ---- Computer: CRT monitor, tower, keyboard, mouse
-  const monX = -0.32, monZ = -0.98;
-  staticBox(0.3, 0.04, 0.24, monX, DT + 0.02, monZ, beige);
-  staticBox(0.44, 0.38, 0.32, monX, DT + 0.04 + 0.19, monZ + 0.03, beige);
-  const back = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.28, 0.16), beige);
-  back.position.set(monX, DT + 0.04 + 0.18, monZ - 0.2); back.castShadow = true; scene.add(back);
-  const screen = new THREE.Mesh(new THREE.PlaneGeometry(0.36, 0.28), std({ map: T.crtScreen(), roughness: 0.15, metalness: 0.1 }));
-  screen.position.set(monX, DT + 0.04 + 0.2, monZ + 0.191); scene.add(screen);
-  screen.name = 'crtScreen';
-  staticBox(0.2, 0.42, 0.42, deskX1 - 0.65, 0.21, -1.0, beige); // tower under the desk
-  const kb = new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.025, 0.16), std({ map: T.keyboard(), roughness: 0.6 }));
-  kb.position.set(monX, DT + 0.013, -0.66); kb.rotation.x = -0.05; kb.castShadow = true; kb.receiveShadow = true; scene.add(kb);
-  const kbBody = new CANNON.Body({ mass: 0, material: physMat }); kbBody.addShape(new CANNON.Box(new CANNON.Vec3(0.23, 0.0125, 0.08))); kbBody.position.set(monX, DT + 0.013, -0.66); world.addBody(kbBody);
-  const mouse = new THREE.Mesh(new THREE.CapsuleGeometry(0.028, 0.04, 4, 10), beige);
-  mouse.rotation.x = Math.PI / 2; mouse.scale.set(1, 1, 0.55); mouse.position.set(-0.0, DT + 0.016, -0.65); mouse.castShadow = true; scene.add(mouse);
-  const cord = new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3([
-    new THREE.Vector3(0, DT + 0.01, -0.69), new THREE.Vector3(0.02, DT + 0.005, -0.85), new THREE.Vector3(-0.1, DT + 0.005, -1.05), new THREE.Vector3(-0.2, DT + 0.005, -1.15)]), 20, 0.004, 5), std({ color: '#bdb6a0' }));
-  scene.add(cord);
-
-  // ---- Paper stack (left side of the desk)
-  const stack = new THREE.Group(); stack.position.set(-0.98, DT, -0.86); scene.add(stack);
+  // ---- Paperwork: stacked letter trays, the spreadsheet stack, loose sheets
+  const trayMat = std({ color: '#3a3b3d', roughness: 0.5 });
   const paperMat = std({ map: T.paper(false), roughness: 0.95 });
+  const trayX = -1.08, trayZ = -1.08;
+  for (let k = 0; k < 3; k++) {
+    const y = DT + k * 0.075;
+    staticBox(0.26, 0.006, 0.34, trayX, y + 0.003, trayZ, trayMat, { collide: false });
+    staticBox(0.006, 0.05, 0.34, trayX - 0.127, y + 0.025, trayZ, trayMat, { collide: false });
+    staticBox(0.006, 0.05, 0.34, trayX + 0.127, y + 0.025, trayZ, trayMat, { collide: false });
+    staticBox(0.22, 0.012 + k * 0.01, 0.29, trayX, y + 0.012 + k * 0.005, trayZ + 0.01, paperMat, { collide: false });
+    [-0.11, 0.11].forEach((dx) => staticBox(0.01, 0.075, 0.01, trayX + dx, y + 0.0375, trayZ + 0.16, trayMat, { collide: false }));
+  }
+  staticCollider(0.13, 0.11, 0.17, trayX, DT + 0.11, trayZ);
+  const stackX = -0.78, stackZ = -0.98;
+  const stack = new THREE.Group(); stack.position.set(stackX, DT, stackZ); scene.add(stack);
   for (let i = 0; i < 14; i++) {
     const s = new THREE.Mesh(new THREE.BoxGeometry(0.215, 0.004, 0.28), paperMat);
     s.position.set((Math.random() - 0.5) * 0.012, 0.002 + i * 0.0042, (Math.random() - 0.5) * 0.012);
@@ -123,16 +256,26 @@ export function buildRoom(scene, world) {
   }
   const top = new THREE.Mesh(new THREE.PlaneGeometry(0.215, 0.28), std({ map: T.spreadsheet(), roughness: 0.95 }));
   top.rotation.x = -Math.PI / 2; top.position.y = 0.062; stack.add(top);
-  const stackBody = new CANNON.Body({ mass: 0, material: physMat }); stackBody.addShape(new CANNON.Box(new CANNON.Vec3(0.11, 0.03, 0.14))); stackBody.position.set(-0.98, DT + 0.03, -0.86); world.addBody(stackBody);
+  staticCollider(0.11, 0.03, 0.14, stackX, DT + 0.03, stackZ);
+  [[0.55, -1.02, 0.35, true], [0.98, 0.0, -0.25, false], [-0.55, -1.12, -0.12, true]].forEach(([x, z, r, ss]) => {
+    const sh = new THREE.Mesh(new THREE.PlaneGeometry(0.215, 0.28), std({ map: ss ? T.spreadsheet() : T.paper(true), roughness: 0.95 }));
+    sh.rotation.x = -Math.PI / 2; sh.rotation.z = r; sh.position.set(x, DT + 0.0016, z); sh.receiveShadow = true; scene.add(sh);
+  });
 
-  // ---- Calendar on the left wall (stuck on the wrong month)
-  const cal = new THREE.Mesh(new THREE.PlaneGeometry(0.36, 0.5), std({ map: T.calendar(), roughness: 0.9 }));
-  cal.position.set(-H + 0.004, 1.42, -0.32); cal.rotation.y = Math.PI / 2; cal.name = 'calendar'; scene.add(cal);
-  const calPin = new THREE.Mesh(new THREE.SphereGeometry(0.008, 8, 8), std({ color: '#c33' }));
-  calPin.position.set(-H + 0.01, 1.66, -0.32); scene.add(calPin);
+  // ---- Things on the walls
+  const cal = wallPlane(0.36, 0.5, T.calendar(), 'left', -0.12, 1.42); cal.name = 'calendar';   // stuck on the wrong month
+  pin('left', -0.12, 1.66);
+  wallPlane(0.5, 0.7, T.poster(), 'left', 0.82, 1.45);                                          // our own motivational poster
+  [[0.63, 1.69], [1.01, 1.69]].forEach(([a, y]) => pin('left', a, y));
+  staticBox(0.02, 0.66, 0.8, H - 0.01, 1.42, -0.0, std({ color: '#6e5232' }), { collide: false, shadow: false });
+  wallPlane(0.8, 0.53, T.corkboard(), 'right', 0.0, 1.42, { inset: 0.0215 });                  // corkboard over the return
+  const memo = () => std({ map: T.paper(true), roughness: 0.95 });
+  wallPlane(0.2, 0.27, null, 'back', 0.28, 1.2, { tilt: 0.04, mat: memo() }); pin('back', 0.28, 1.32);
+  wallPlane(0.2, 0.27, null, 'back', 1.08, 1.32, { tilt: -0.03, mat: memo() }); pin('back', 1.08, 1.44);
+  wallPlane(0.2, 0.27, null, 'front', 0.15, 1.4, { tilt: 0.02, mat: memo() }); pin('front', 0.15, 1.52);
 
-  // ---- Wall clock above the desk
-  const clock = new THREE.Group(); clock.position.set(0.15, 1.95, -H + 0.03); scene.add(clock);
+  // ---- Wall clock (back wall, right of the shelf)
+  const clock = new THREE.Group(); clock.position.set(0.72, 1.95, -H + 0.03); scene.add(clock);
   const rim = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.16, 0.04, 40), std({ color: '#2b2b2b', roughness: 0.4 }));
   rim.rotation.x = Math.PI / 2; clock.add(rim);
   const face = new THREE.Mesh(new THREE.CircleGeometry(0.145, 40), std({ map: T.clockFace(), roughness: 0.7 }));
@@ -148,9 +291,9 @@ export function buildRoom(scene, world) {
   const glass = new THREE.Mesh(new THREE.CircleGeometry(0.15, 40), new THREE.MeshStandardMaterial({ color: '#fff', transparent: true, opacity: 0.08, roughness: 0.05 }));
   glass.position.z = 0.034; clock.add(glass);
 
-  // ---- Wire mesh trash can under the desk (hollow, so things can land in it)
+  // ---- Wire mesh trash can (hollow, so things can land in it)
   // tucked at the desk's front-left corner: still "by the desk", but the opening is reachable for a shot
-  const canX = -0.98, canZ = -0.3, canR = 0.155, canH = 0.33;
+  const canX = -1.08, canZ = -0.39, canR = 0.155, canH = 0.33;
   const meshTex = T.wireMesh();
   const can = new THREE.Mesh(new THREE.CylinderGeometry(canR + 0.015, canR - 0.02, canH, 28, 1, true),
     new THREE.MeshStandardMaterial({ color: '#1d1d1d', alphaMap: meshTex, transparent: true, alphaTest: 0.4, side: THREE.DoubleSide, metalness: 0.6, roughness: 0.4 }));
@@ -232,7 +375,7 @@ export function buildRoom(scene, world) {
     g.computeVertexNormals();
     return g;
   }
-  [[-0.62, -0.78], [-0.55, -0.6]].forEach(([x, z], i) => {
+  [[-0.6, -0.8], [-0.56, -0.66]].forEach(([x, z], i) => {
     const m = new THREE.Mesh(crumpleGeo(0.038), ballMat);
     m.material = ballMat.clone(); m.material.flatShading = true;
     // paper is light and lumpy: lots of air drag, and it stops rolling quickly
@@ -240,7 +383,7 @@ export function buildRoom(scene, world) {
   });
 
   // pencils (in a cup)
-  const cupX = 0.3, cupZ = -1.08;
+  const cupX = 0.28, cupZ = -1.12;
   const cup = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.035, 0.1, 18, 1, true), std({ color: '#2a2a2a', side: THREE.DoubleSide, roughness: 0.4, metalness: 0.4 }));
   cup.position.set(cupX, DT + 0.05, cupZ); cup.castShadow = true; scene.add(cup);
   const cupBody = new CANNON.Body({ mass: 0, material: physMat });
@@ -274,7 +417,7 @@ export function buildRoom(scene, world) {
   const sTop = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.026, 0.155), std({ color: '#a8322d', roughness: 0.35 }));
   sTop.position.set(0, 0.008, -0.004); sTop.rotation.x = 0.04;
   stapler.add(sBase, sTop);
-  addProp('stapler', stapler, new CANNON.Box(new CANNON.Vec3(0.0225, 0.025, 0.08)), 0.32, 0.38, DT + 0.03, -0.72, { sound: 'heavy', rot: [0, 0.4, 0] });
+  addProp('stapler', stapler, new CANNON.Box(new CANNON.Vec3(0.0225, 0.025, 0.08)), 0.32, 0.42, DT + 0.03, -0.9, { sound: 'heavy', rot: [0, 0.4, 0] });
 
   // coffee mug (cold, old coffee)
   const mug = new THREE.Group();
@@ -284,8 +427,8 @@ export function buildRoom(scene, world) {
   const handle = new THREE.Mesh(new THREE.TorusGeometry(0.026, 0.007, 8, 16, Math.PI), std({ color: '#d9a830', roughness: 0.3 }));
   handle.rotation.z = -Math.PI / 2; handle.position.x = 0.04;
   mug.add(mugBody, mugBottom, coffee, handle);
-  addProp('mug', mug, new CANNON.Cylinder(0.04, 0.04, 0.095, 12), 0.3, -0.7, DT + 0.05, -0.58, { sound: 'ceramic' });
+  addProp('mug', mug, new CANNON.Cylinder(0.04, 0.04, 0.095, 12), 0.3, -0.8, DT + 0.05, -0.68, { sound: 'ceramic' });
 
   props.forEach((p) => { p.angDamp = p_damp.get(p.body); });
-  return { props, colliders, chair, chairBody, clock: { hourHand, minHand, secHand }, trashCan, physMat };
+  return { props, colliders, chair, chairBody, clock: { hourHand, minHand, secHand, group: clock }, trashCan, physMat, detectorLed: ledMat, panels };
 }

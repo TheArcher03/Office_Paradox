@@ -33,7 +33,7 @@ export function carpet() {
 
 export function fabric() {
   const [c, g] = canvas(256, 256);
-  g.fillStyle = '#6f7f8c'; g.fillRect(0, 0, 256, 256);
+  g.fillStyle = '#80867c'; g.fillRect(0, 0, 256, 256);
   for (let x = 0; x < 256; x += 2) {
     g.fillStyle = `rgba(0,0,0,${0.04 + 0.04 * rnd()})`; g.fillRect(x, 0, 1, 256);
   }
@@ -48,7 +48,7 @@ export function fabric() {
 
 export function laminate() {
   const [c, g] = canvas(512, 128);
-  g.fillStyle = '#b8a888'; g.fillRect(0, 0, 512, 128);
+  g.fillStyle = '#c4b596'; g.fillRect(0, 0, 512, 128);
   for (let i = 0; i < 70; i++) {
     const y = rnd() * 128;
     g.strokeStyle = `rgba(110,90,60,${0.08 + 0.1 * rnd()})`;
@@ -165,4 +165,109 @@ export function wireMesh() {
   }
   const t = tex(c, 4, 2, false);
   return t;
+}
+
+// ---------- Added for the reference-matched cubicle ----------
+
+export function ceilingTiles() {
+  // 60 cm acoustic tiles in a metal T-bar grid. One texture repeat = one tile.
+  const [c, g] = canvas(256, 256);
+  g.fillStyle = '#e4e2dc'; g.fillRect(0, 0, 256, 256);
+  for (let i = 0; i < 2600; i++) {
+    g.fillStyle = `rgba(90,88,80,${0.12 + 0.25 * rnd()})`;
+    g.fillRect(rnd() * 256, rnd() * 256, 1 + rnd() * 1.5, 1 + rnd() * 1.5);
+  }
+  g.fillStyle = '#c9c8c3'; g.fillRect(0, 0, 256, 6); g.fillRect(0, 0, 6, 256);
+  g.fillStyle = 'rgba(0,0,0,0.12)'; g.fillRect(6, 6, 250, 2); g.fillRect(6, 6, 2, 250);
+  return tex(c, 1, 1);
+}
+
+export function corkboard() {
+  const [c, g] = canvas(512, 336);
+  g.fillStyle = '#b98b55'; g.fillRect(0, 0, 512, 336);
+  for (let i = 0; i < 9000; i++) {
+    g.fillStyle = rnd() > 0.5 ? `rgba(120,80,40,${0.35 * rnd()})` : `rgba(230,190,140,${0.3 * rnd()})`;
+    g.fillRect(rnd() * 512, rnd() * 336, 1 + rnd() * 2, 1 + rnd() * 2);
+  }
+  const pin = (x, y, col) => { g.fillStyle = col; g.beginPath(); g.arc(x, y, 5, 0, Math.PI * 2); g.fill(); g.fillStyle = 'rgba(255,255,255,0.5)'; g.beginPath(); g.arc(x - 1.5, y - 1.5, 1.6, 0, Math.PI * 2); g.fill(); };
+  const memo = (x, y, w, h, rot, lines = true) => {
+    g.save(); g.translate(x, y); g.rotate(rot);
+    g.fillStyle = 'rgba(0,0,0,0.18)'; g.fillRect(-w / 2 + 3, -h / 2 + 4, w, h);
+    g.fillStyle = '#f3f1ea'; g.fillRect(-w / 2, -h / 2, w, h);
+    if (lines) { g.fillStyle = 'rgba(60,60,60,0.45)'; g.fillRect(-w / 2 + 10, -h / 2 + 10, w * 0.5, 4); for (let yy = -h / 2 + 24; yy < h / 2 - 8; yy += 7) g.fillRect(-w / 2 + 10, yy, (w - 20) * (0.6 + 0.4 * rnd()), 2); }
+    g.restore(); pin(x + Math.sin(rot) * h * 0.45, y - h / 2 + 8, '#c0392b');
+  };
+  const sticky = (x, y, rot, col = '#efd85a') => {
+    g.save(); g.translate(x, y); g.rotate(rot);
+    g.fillStyle = 'rgba(0,0,0,0.15)'; g.fillRect(-27, -25, 56, 56);
+    g.fillStyle = col; g.fillRect(-29, -29, 56, 56);
+    g.strokeStyle = 'rgba(40,40,60,0.7)'; g.lineWidth = 2;
+    for (let k = 0; k < 3; k++) { g.beginPath(); g.moveTo(-20, -14 + k * 11); for (let xx = -20; xx < 16; xx += 6) g.lineTo(xx, -14 + k * 11 + (rnd() - 0.5) * 4); g.stroke(); }
+    g.restore();
+  };
+  memo(110, 110, 130, 165, -0.06);
+  memo(270, 95, 120, 150, 0.05);
+  memo(405, 150, 110, 140, -0.03);
+  sticky(190, 245, 0.08);
+  sticky(330, 255, -0.1, '#f2c14e');
+  sticky(450, 60, 0.12, '#e9e07a');
+  // an old photo of a beach, curling at the corner
+  g.save(); g.translate(70, 265); g.rotate(-0.1);
+  g.fillStyle = '#fafafa'; g.fillRect(-42, -34, 84, 68);
+  const sky = g.createLinearGradient(0, -28, 0, 28); sky.addColorStop(0, '#8cc2e6'); sky.addColorStop(0.55, '#d9eef7'); sky.addColorStop(0.56, '#3f86b8'); sky.addColorStop(1, '#e5d3a0');
+  g.fillStyle = sky; g.fillRect(-36, -28, 72, 50);
+  g.restore(); pin(70, 236, '#2a6db0');
+  // frame
+  g.strokeStyle = '#6e5232'; g.lineWidth = 14; g.strokeRect(7, 7, 498, 322);
+  return tex(c);
+}
+
+export function poster() {
+  const [c, g] = canvas(256, 360);
+  g.fillStyle = '#121212'; g.fillRect(0, 0, 256, 360);
+  const sky = g.createLinearGradient(0, 18, 0, 250);
+  sky.addColorStop(0, '#24365e'); sky.addColorStop(0.55, '#d86f4b'); sky.addColorStop(1, '#f2c27a');
+  g.fillStyle = sky; g.fillRect(18, 18, 220, 232);
+  g.fillStyle = '#f6dd9d'; g.beginPath(); g.arc(128, 214, 26, Math.PI, 0); g.fill();
+  g.fillStyle = '#1f2a3a'; g.fillRect(18, 214, 220, 36);
+  // a single small figure on a dock, facing the sun
+  g.fillStyle = '#0f1218'; g.fillRect(96, 208, 70, 4); g.fillRect(126, 192, 6, 16); g.beginPath(); g.arc(129, 188, 4, 0, Math.PI * 2); g.fill();
+  g.fillStyle = '#e9e4d8'; g.textAlign = 'center';
+  g.font = 'bold 21px Georgia, serif'; g.fillText('PATIENCE', 128, 284);
+  g.font = 'italic 11.5px Georgia, serif';
+  g.fillText('You are exactly where', 128, 310); g.fillText('you need to be.', 128, 326);
+  return tex(c);
+}
+
+export function stickyNote(seedShift = 0) {
+  const [c, g] = canvas(64, 64);
+  const cols = ['#efd85a', '#f2c14e', '#e9e07a'];
+  g.fillStyle = cols[seedShift % 3]; g.fillRect(0, 0, 64, 64);
+  g.fillStyle = 'rgba(0,0,0,0.06)'; g.fillRect(0, 0, 64, 9);
+  g.strokeStyle = 'rgba(35,35,70,0.75)'; g.lineWidth = 2.2;
+  for (let k = 0; k < 3; k++) { g.beginPath(); g.moveTo(9, 20 + k * 12); for (let x = 9; x < 52; x += 6) g.lineTo(x, 20 + k * 12 + (rnd() - 0.5) * 5); g.stroke(); }
+  return tex(c);
+}
+
+export function phoneKeypad() {
+  const [c, g] = canvas(128, 128);
+  g.fillStyle = '#2b2c2e'; g.fillRect(0, 0, 128, 128);
+  g.fillStyle = '#9fb3a0'; g.fillRect(14, 10, 100, 22); // little LCD
+  for (let r = 0; r < 4; r++) for (let k = 0; k < 3; k++) {
+    g.fillStyle = '#d9d6cc'; g.fillRect(22 + k * 30, 42 + r * 21, 22, 15);
+  }
+  g.fillStyle = '#c0392b'; g.fillRect(110, 42, 10, 10); // message light
+  return tex(c);
+}
+
+export function binderSpine(color, label = true) {
+  const [c, g] = canvas(64, 256);
+  g.fillStyle = color; g.fillRect(0, 0, 64, 256);
+  g.fillStyle = 'rgba(255,255,255,0.08)'; g.fillRect(4, 0, 6, 256);
+  if (label) {
+    g.fillStyle = '#f1efe8'; g.fillRect(10, 30, 44, 110);
+    g.fillStyle = 'rgba(40,40,40,0.55)'; for (let y = 44; y < 130; y += 12) g.fillRect(16, y, 32 * (0.5 + 0.5 * rnd()), 3);
+    g.strokeStyle = 'rgba(0,0,0,0.35)'; g.lineWidth = 3; g.beginPath(); g.arc(32, 200, 11, 0, Math.PI * 2); g.stroke();
+  }
+  return tex(c);
 }

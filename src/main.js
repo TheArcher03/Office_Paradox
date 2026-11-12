@@ -35,26 +35,21 @@ renderer.toneMappingExposure = 1.12;
 app.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
-scene.background = new THREE.Color('#111113');
+scene.background = new THREE.Color('#2a2b29');
 const camera = new THREE.PerspectiveCamera(TUNE.fov, window.innerWidth / window.innerHeight, 0.03, 60);
 camera.rotation.order = 'YXZ';
 
 // Lights: flat, overhead office light. There's no ceiling — just a light hanging in the dark, far too high up.
 scene.add(new THREE.HemisphereLight('#eef2f6', '#4a4a4a', 1.0));
 const sun = new THREE.DirectionalLight('#f4f6ff', 1.7);
-sun.position.set(0.4, 6, 0.9);
+sun.position.set(0.3, 6, 0.25);
 sun.castShadow = true;
 sun.shadow.mapSize.set(2048, 2048);
-Object.assign(sun.shadow.camera, { left: -1.7, right: 1.7, top: 1.7, bottom: -1.7, near: 1, far: 9 });
+Object.assign(sun.shadow.camera, { left: -1.8, right: 1.8, top: 1.8, bottom: -1.8, near: 1, far: 9 });
 sun.shadow.bias = -0.0004; sun.shadow.normalBias = 0.02;
 scene.add(sun);
 const fill = new THREE.PointLight('#fff8ee', 0.6, 4, 2); fill.position.set(0, 1.9, 0.6); scene.add(fill);
-const panelMat = new THREE.MeshBasicMaterial({ color: '#f2f6ff' });
-[[-0.5, 0.6], [0.7, 0.6]].forEach(([x, z]) => {
-  const p = new THREE.Mesh(new THREE.PlaneGeometry(1.3, 0.45), panelMat);
-  p.rotation.x = Math.PI / 2; p.position.set(x, 6.2, z); scene.add(p);
-});
-
+const ceilingGlow = new THREE.PointLight('#f2f5ff', 0.9, 5, 2); ceilingGlow.position.set(0.3, 2.85, 0); scene.add(ceilingGlow);
 // ---------- Physics ----------
 const world = new CANNON.World({ gravity: new CANNON.Vec3(0, -9.82, 0) });
 world.allowSleep = true;
@@ -88,7 +83,7 @@ composer.addPass(grayPass);
 
 // ---------- Player ----------
 const player = {
-  pos: new THREE.Vector3(-0.32, 0, -0.22),
+  pos: new THREE.Vector3(-0.25, 0, -0.1),
   vel: new THREE.Vector2(),
   yaw: 0, pitch: -0.18,
   seated: true,
@@ -418,7 +413,7 @@ function updateClock(dt) {
     clock.hourHand.rotation.z = -(hr / 12) * Math.PI * 2;
     if (!paused) {
       // pan the tick toward the clock
-      const toClock = new THREE.Vector3(0.15 - camera.position.x, 0, -ROOM.half - camera.position.z).normalize();
+      const toClock = new THREE.Vector3(clock.group.position.x - camera.position.x, 0, clock.group.position.z - camera.position.z).normalize();
       camera.getWorldDirection(fwd); right.set(-fwd.z, 0, fwd.x).normalize();
       Audio.tick(THREE.MathUtils.clamp(toClock.dot(right), -1, 1) * 0.7);
     }
@@ -449,6 +444,7 @@ function frame(now) {
   camera.updateProjectionMatrix();
   grayPass.uniforms.inspect.value += ((inspecting ? 1 : 0) - grayPass.uniforms.inspect.value) * Math.min(1, dt * 7);
   grayPass.uniforms.time.value = (now / 1000) % 100;
+  room.detectorLed.emissiveIntensity = (now % 4000) < 140 ? 3 : 0;
 
   updateHUD();
   composer.render();
