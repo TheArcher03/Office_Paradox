@@ -7,6 +7,10 @@ import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
+import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
+import { GTAOPass } from 'three/examples/jsm/postprocessing/GTAOPass.js';
+import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
+import { createThings } from './things.js';
 import { buildRoom, ROOM } from './room.js';
 import { GrayFilterShader } from './grayFilter.js';
 import * as Audio from './audio.js';
@@ -20,6 +24,13 @@ import { crossDay, resetCalendar, CALENDAR } from './textures.js';
 // ---------- Tuning knobs (change these to adjust the feel) ----------
 const TUNE = {
   lookSensitivity: 0.0022,
+  // The detail pass
+  keyLight: 15,             // the ceiling light over your cubicle
+  lampPower: 5.5,             // the desk lamp
+  fanPush: 0.07,            // how hard the desk fan pushes loose paper
+  standEye: 2.3, standTime: 0.85,   // Space: stand on the chair and look over the wall
+  zoomFov: 30,              // Shift / mouse wheel: lean in for a closer look
+  bloom: 0.22, ao: 1.0,     // glow around bright things; soft contact shadows (0 turns either off)
   // The dot is a cursor: the mouse moves it around the view, and pushing it toward an edge turns your head.
   dotSpeed: 1.0,            // how fast the dot follows the mouse
   edgeZone: 0.58,           // how far from the middle (0 to 1) the dot has to be before the view starts turning
@@ -81,25 +92,34 @@ renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.12;
+renderer.toneMappingExposure = 0.87;
 app.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
-scene.background = new THREE.Color('#2a2b29');
+scene.background = new THREE.Color('#2c3033');
 const camera = new THREE.PerspectiveCamera(TUNE.fov, window.innerWidth / window.innerHeight, 0.03, 60);
 camera.rotation.order = 'YXZ';
 
-// Lights: flat overhead office light from the fluorescent panels.
-scene.add(new THREE.HemisphereLight('#eef2f6', '#4a4a4a', 1.0));
-const sun = new THREE.DirectionalLight('#f4f6ff', 1.7);
-sun.position.set(0.3, 6, 0.25);
+// Lights. The fluorescent panel over this cubicle does most of the work and casts the shadows; the rest of the
+// floor's lights spill over the walls. Small warm lights (under the shelf, the desk lamp) live in src/room.js.
+scene.fog = new THREE.Fog('#2c3033', 8, 30);
+{
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;   // something for shiny things to reflect
+  scene.environmentIntensity = 0.22;
+  pmrem.dispose();
+}
+scene.add(new THREE.HemisphereLight('#e6ebf2', '#4d4a44', 0.3));
+const sun = new THREE.SpotLight('#f2f5ff', TUNE.keyLight, 0, 0.82, 0.7, 1.5);
+sun.position.set(0.95, ROOM.ceilingY - 0.03, 0.75); sun.target.position.set(-0.25, 0.5, -0.7); scene.add(sun.target);
 sun.castShadow = true;
 sun.shadow.mapSize.set(2048, 2048);
-Object.assign(sun.shadow.camera, { left: -1.8, right: 1.8, top: 1.8, bottom: -1.8, near: 1, far: 9 });
-sun.shadow.bias = -0.0004; sun.shadow.normalBias = 0.02;
+sun.shadow.camera.near = 0.6; sun.shadow.camera.far = 5.2;
+sun.shadow.bias = -0.0005; sun.shadow.normalBias = 0.025;
 scene.add(sun);
-const fill = new THREE.PointLight('#fff8ee', 0.6, 4, 2); fill.position.set(0, 1.9, 0.6); scene.add(fill);
-const ceilingGlow = new THREE.PointLight('#f2f5ff', 0.9, 5, 2); ceilingGlow.position.set(0.3, 2.85, 0); scene.add(ceilingGlow);
+for (const [x, z] of [[0.3, -3.6], [0.3, 3.6], [-3.3, 0], [3.9, 0]]) { const spill = new THREE.PointLight('#eef2ff', 1.5, 8, 1.6); spill.position.set(x, ROOM.ceilingY - 0.25, z); scene.add(spill); }
+{ const fillLight = new THREE.PointLight('#eef2ff', 4.5, 7, 1.5); fillLight.position.set(0.3, ROOM.ceilingY - 0.2, 0.1); scene.add(fillLight); }   // the same fixture, lighting the corners the shadow-caster misses
+const screenGlow = new THREE.PointLight('#bcd0e2', 0, 1.5, 1.8); scene.add(screenGlow);   // the monitor lights your desk a little when it's on
 
 // ---------- Physics ----------
 const world = new CANNON.World({ gravity: new CANNON.Vec3(0, -9.82, 0) });
@@ -126,6 +146,15 @@ room.impact.fn = (p, e) => {
 const composer = new EffectComposer(renderer);
 const renderPass = new RenderPass(scene, camera);
 composer.addPass(renderPass);
+// soft contact shadows where things meet, then a little glow around anything brighter than white
+const gtao = new GTAOPass(scene, camera, window.innerWidth, window.innerHeight);
+gtao.updateGtaoMaterial({ radius: 0.22, distanceExponent: 1.4, thickness: 1.2, scale: 1.15, samples: 12, screenSpaceRadius: false });
+gtao.updatePdMaterial({ lumaPhi: 10, depthPhi: 2, normalPhi: 3, radius: 6, rings: 2, samples: 8 });
+gtao.blendIntensity = TUNE.ao; gtao.enabled = TUNE.ao > 0;
+composer.addPass(gtao);
+const bloom = new UnrealBloomPass(new THREE.Vector2(window.innerWidth / 2, window.innerHeight / 2), TUNE.bloom, 0.7, 1.0);
+bloom.enabled = TUNE.bloom > 0;
+composer.addPass(bloom);
 composer.addPass(new OutputPass());
 const grayPass = new ShaderPass(GrayFilterShader);
 grayPass.uniforms.saturation.value = TUNE.startColor;
@@ -183,6 +212,9 @@ let hovered = null;         // { kind: 'prop', prop } | { kind: 'dispenser' | 's
 let shred = null;           // a sheet on its way into the shredder
 let mouseHeld = false, crossTimer = 0, calendarFocus = 0;
 let highlighted = null;     // the object currently glowing
+const things = createThings({ scene, camera, room, props, TUNE });
+const peek = { on: false, k: 0 };          // Space: standing on the chair
+let zoomLevel = 0;                           // mouse wheel: 0 (normal) to 1 (leaned right in)
 const paper = props.filter((p) => p.grab);   // every loose sheet + ball, oldest first
 const raycaster = new THREE.Raycaster();
 // The dot: where on the view you're pointing (-1 to 1 each way, 0,0 is the middle), and the direction that is in the room.
@@ -269,6 +301,7 @@ window.addEventListener('keydown', (e) => {
     if (!e.repeat) pc.key(e.code, true);
     return;
   }
+  if (things.examining) { if (e.code === 'KeyE' || e.code === 'KeyF') things.putBack(); return; }
   if (e.code === 'KeyJ') { journal.toggle(); return; }
   if (journal.open) {
     if (e.code === 'ArrowRight' || e.code === 'KeyD') journal.turn(1);
@@ -276,6 +309,10 @@ window.addEventListener('keydown', (e) => {
     return;
   }
   if (e.code === 'KeyF') putDown();
+  // E: pick up what the dot is on and turn it over in your hands
+  if (e.code === 'KeyE' && !held && !crumple && !fold && hovered && hovered.obj && hovered.obj.userData.examine && peek.k < 0.1) { if (things.examine(hovered.obj)) hovered = null; }
+  // the phone is off the hook: the number keys dial
+  if (things.phoneUp) { const d = /^(Digit|Numpad)(\d)$/.exec(e.code); if (d) things.dial(d[2]); else if (e.code === 'NumpadMultiply') things.dial('*'); else if (e.code === 'Minus' || e.code === 'NumpadSubtract') things.dial('#'); }
   if (e.code.startsWith('Arrow') || e.code === 'Space') e.preventDefault();
 });
 window.addEventListener('keyup', (e) => { keys.delete(e.code); pc.key(e.code, false); });
@@ -292,6 +329,7 @@ window.addEventListener('mousemove', (e) => {
   }
   if (!locked && !fallbackLook) return;
   if (journal.open) return;
+  if (things.examining) { things.turn(THREE.MathUtils.clamp(e.movementX || 0, -200, 200), THREE.MathUtils.clamp(e.movementY || 0, -200, 200)); return; }
   if (flight) {
     // in the air, the mouse steers the plane
     if (!flight.ending) {
@@ -322,6 +360,7 @@ window.addEventListener('mousedown', (e) => {
   if (e.target !== canvas) return;
   if (dayEnd) { if (dayEnd.card) dayEnd.go = true; return; }
   if (replay || dreaming || flight) return;
+  if (things.examining) { if (e.button === 2) things.putBack(); return; }
   if (desk.at) {
     if (e.button === 2) { leaveDesk(); return; }
     if (e.button !== 0) return;
@@ -331,9 +370,17 @@ window.addEventListener('mousedown', (e) => {
   }
   if (drums.on) { drumHit(e.button === 2 ? 1 : 0); return; }
   if (recline.on) { sitUp(); return; }
+  if (peek.k > 0.1) return;                  // both hands are on the wall
   if (e.button === 0) { mouseHeld = true; click(); }
   else if (e.button === 2) putDown();
 });
+// mouse wheel: lean in for a closer look (or bring the thing in your hands closer)
+window.addEventListener('wheel', (e) => {
+  if (paused || journal.open) return;
+  if (things.examining) { things.zoom(e.deltaY); return; }
+  if (busy()) return;
+  zoomLevel = THREE.MathUtils.clamp(zoomLevel - e.deltaY * 0.0016, 0, 1);
+}, { passive: true });
 window.addEventListener('mouseup', (e) => { if (e.button === 0) { mouseHeld = false; releasePress(); } });
 
 // One button does everything: empty hand → pick up paper. Flat sheet in hand → crumple it. Ball in hand → toss it.
@@ -373,6 +420,8 @@ function useHovered() {
   else if (hovered.kind === 'computer') enterDesk();
   else if (hovered.kind === 'pencils') enterDrums();
   else if (hovered.kind === 'lever') startRecline();
+  else if (hovered.kind === 'examine') { if (things.examine(hovered.obj)) hovered = null; }
+  else if (things.use(hovered.kind, hovered.obj)) { /* lamp, fan, phone, stapler, mug, drawers, desk toy */ }
   else if (hovered.kind === 'dispenser') {
     // take a fresh sheet off the top of the stack
     const s = room.stackTop;
@@ -643,7 +692,7 @@ function checkBaskets() {
 // =====================================================================================================
 const moveToward = (v, target, step) => (v < target ? Math.min(target, v + step) : Math.max(target, v - step));
 // true while something other than plain sitting-and-looking has the view
-const busy = () => desk.k > 0 || recline.on || !!flight || drums.on || drums.k > 0 || !!replay || !!dreaming || !!dayEnd;
+const busy = () => !!things.examining || desk.k > 0 || recline.on || !!flight || drums.on || drums.k > 0 || !!replay || !!dreaming || !!dayEnd;
 function forgetPaper(p) {
   const i = paper.indexOf(p); if (i >= 0) paper.splice(i, 1);
   if (highlighted === p.mesh) highlighted = null;
@@ -920,6 +969,7 @@ function updateRecline(dt) {
 }
 function applyReclineCamera() {
   const r = recline;
+  room.chairBack.rotation.x = 0.09 + 0.55 * easeInOut(r.lean);      // the backrest tips back with you
   if (r.leg <= 0 && r.lean <= 0) return;
   const ke = easeInOut(r.leg), le = easeInOut(r.lean);
   // watch your feet go up, then tip back and look at the ceiling
@@ -1071,6 +1121,7 @@ function applyOvernight() {
   }
   // every third day, something new
   room.plant.visible = st.day >= 3;
+  things.overnight();
   stall = 0; tape.length = 0; replayQueue = null;
   brain.save();
 }
@@ -1185,7 +1236,15 @@ function updatePlayer(dt) {
   chairBody.quaternion.setFromEuler(0, chair.rotation.y, 0);
 
   const off = 0.07;
-  camera.position.set(TUNE.seat.x - Math.sin(player.yaw) * off, TUNE.eyeSeated, TUNE.seat.z - Math.cos(player.yaw) * off);
+  // Space: climb up and stand on the chair. It wobbles.
+  peek.on = keys.has('Space');
+  const wantUp = peek.on && !busy() && !journal.open && !held && !crumple && !fold;
+  if (wantUp && peek.k === 0) Audio.creak();
+  if (!wantUp && peek.k === 1) Audio.creak();
+  peek.k = THREE.MathUtils.clamp(peek.k + (wantUp ? 1 : -1) * dt / TUNE.standTime, 0, 1);
+  const rise = easeInOut(peek.k), tw = performance.now() / 1000;
+  camera.position.set(TUNE.seat.x - Math.sin(player.yaw) * off * (1 - rise) + Math.sin(tw * 1.9) * 0.012 * rise,
+    TUNE.eyeSeated + (TUNE.standEye - TUNE.eyeSeated) * rise + Math.sin(tw * 2.7) * 0.006 * rise, TUNE.seat.z - Math.cos(player.yaw) * off * (1 - rise) + Math.cos(tw * 1.4) * 0.012 * rise);
   // dizzy: the room keeps swimming for a while after a long spin
   const d = player.dizzy, t = performance.now() / 1000;
   camera.rotation.set(player.pitch + Math.sin(t * 1.3) * 0.035 * d, player.yaw + Math.sin(t * 0.83) * 0.07 * d, Math.sin(t * 1.7) * 0.075 * d);
@@ -1233,52 +1292,62 @@ function updateHeld(dt) {
 function ownerOf(o) {
   while (o) {
     if (o.userData.use) return { kind: o.userData.use, obj: o };
+    if (o.userData.examine) return { kind: 'examine', obj: o };
+    if (o.userData.prop === 'pencil' || o.userData.prop === 'pen') return { kind: 'pencils', obj: room.pencilCup };
     if (o.userData.prop) { const p = paper.find((q) => q.mesh === o); return p ? { kind: 'prop', prop: p } : null; }
     if (o.userData.dispenser) return { kind: 'dispenser', obj: o };
     o = o.parent;
   }
   return null;
 }
-const lookables = [];
+const thingTargets = [...new Set([...room.usables, ...room.examinables])];
+// Is this mesh actually drawn? (hidden things, like the plant before Day 3, shouldn't block the dot)
+function shown(o) { for (let p = o.userData.hitbox ? o.parent : o; p; p = p.parent) if (!p.visible) return false; return true; }
+function within(o, root) { for (let p = o; p; p = p.parent) if (p === root) return true; return false; }
+// The first solid thing under the dot. Glass and other see-through things don't count, nor does what's in your hand.
+function firstHit(far) {
+  raycaster.far = far;
+  for (const h of raycaster.intersectObjects(scene.children, true)) {
+    const o = h.object;
+    if (!o.isMesh || !shown(o) || o.userData.noHit) continue;
+    const mat = Array.isArray(o.material) ? o.material[0] : o.material;
+    if (mat.transparent && mat.opacity < 0.5 && !mat.alphaMap) continue;
+    if (held && within(o, held.prop.mesh)) continue;
+    return h;
+  }
+  return null;
+}
 function updateHover() {
   hovered = null;
-  if (crumple || shred || fold || journal.open || busy()) return;
+  if (crumple || shred || fold || journal.open || busy() || peek.k > 0.1 || things.sipping) return;
   aimRay();
+  const hit = firstHit(TUNE.useReach);
+  const owner = hit ? ownerOf(hit.object) : null;
   if (held) {
-    // with a flat sheet in your hand, the shredder is something you can use it on
-    if (held.kind !== 'sheet' || held.t < 1) return;
-    raycaster.far = TUNE.useReach;
-    if (raycaster.intersectObject(room.shredder, true)[0]) hovered = { kind: 'shredder', obj: room.shredder };
-    else if (raycaster.intersectObject(room.corkboard, false)[0]) hovered = { kind: 'corkboard', obj: room.corkboard };
+    // with a flat sheet in your hand, the shredder and the corkboard are things you can use it on
+    if (held.kind === 'sheet' && held.t >= 1 && owner && (owner.kind === 'shredder' || owner.kind === 'corkboard')) hovered = owner;
     return;
   }
-  lookables.length = 0;
-  for (const p of paper) lookables.push(p.mesh);
-  for (const d of room.dispensers) lookables.push(d);
-  raycaster.far = TUNE.reach;
-  const hit = raycaster.intersectObjects(lookables, true)[0];
-  if (hit) hovered = ownerOf(hit.object);
-  if (hovered) return;
-  if (brain.state.calendarDay < CALENDAR.days) {
-    raycaster.far = TUNE.useReach;
-    if (raycaster.intersectObject(room.calendar, false)[0]) { hovered = { kind: 'calendar', obj: room.calendar }; return; }
+  if (owner) {
+    const paperish = owner.kind === 'prop' || owner.kind === 'dispenser';
+    const ok = owner.kind === 'calendar' ? brain.state.calendarDay < CALENDAR.days
+      : owner.kind === 'shredder' || owner.kind === 'corkboard' ? false
+      : paperish ? hit.distance <= TUNE.reach : true;
+    if (ok) { hovered = owner; return; }
   }
-  raycaster.far = TUNE.useReach;
-  if (raycaster.intersectObject(room.computer, true)[0]) { hovered = { kind: 'computer', obj: room.computer }; return; }
   // small things you can use: the pencil cup, and the lever on your chair
   fwd.copy(aimDir);
   for (const [obj, kind, cone] of [[room.pencilCup, 'pencils', 0.085], [room.lever, 'lever', 0.13]]) {
-    obj.getWorldPosition(tmpV).sub(camera.position);
+    (kind === 'lever' ? obj.children[1] : obj).getWorldPosition(tmpV).sub(camera.position);     // the lever's red handle, not its pivot
     const d = tmpV.length();
-    if (d < TUNE.useReach && tmpV.normalize().angleTo(fwd) < cone) { hovered = { kind, obj }; return; }
+    if (d < TUNE.useReach && !(hit && hit.distance < d - 0.2) && tmpV.normalize().angleTo(fwd) < cone) { hovered = { kind, obj }; return; }
   }
-  // aim assist: paper near the dot counts
-  fwd.copy(aimDir);
+  // aim assist: paper near the dot counts (unless something solid is in the way)
   let best = null, bestAngle = Infinity;
   for (const p of paper) {
     tmpV.copy(p.mesh.position).sub(camera.position);
     const d = tmpV.length();
-    if (d > TUNE.reach || d < 0.05) continue;
+    if (d > TUNE.reach || d < 0.05 || (hit && hit.distance < d - 0.12)) continue;
     const a = tmpV.normalize().angleTo(fwd);
     if (a < TUNE.aimAssist && a < bestAngle) { best = p; bestAngle = a; }
   }
@@ -1323,6 +1392,7 @@ function updateClock(dt) {
 let last = performance.now(), fpsAcc = 0, fpsN = 0, fps = 0;
 function step(dt) {
   updatePlayer(dt);
+  things.update(dt);
   world.step(1 / 120, dt, 6);
   // Draw every loose thing where the physics says it is *right now* (blended between physics ticks, so motion is
   // smooth on any screen refresh rate), then put whatever is in your hand exactly in your hand.
@@ -1383,18 +1453,27 @@ function frame(now) {
     else step(dt);
   }
   lidTop.style.height = lidBot.style.height = (recline.lid * 51).toFixed(2) + '%';
+  lidTop.style.visibility = lidBot.style.visibility = recline.lid > 0.001 ? 'visible' : 'hidden';   // (their soft edge showed even with your eyes open)
 
-  const fovTarget = calendarFocus > 0 ? TUNE.fovCalendar : flight && !flight.ending ? 84 : TUNE.fov;
+  const lean = busy() || peek.k > 0.1 ? 0 : Math.max(zoomLevel, keys.has('ShiftLeft') || keys.has('ShiftRight') ? 1 : 0);
+  const fovTarget = calendarFocus > 0 ? TUNE.fovCalendar : flight && !flight.ending ? 84 : TUNE.fov + (TUNE.zoomFov - TUNE.fov) * lean;
+  room.tick(now / 1000);
+  screenGlow.position.set(room.monitorView.x, room.monitorView.y, room.monitorView.z + 0.3);
+  screenGlow.intensity += ((pc.power === 'on' || pc.power === 'boot' ? 0.55 : 0) - screenGlow.intensity) * Math.min(1, dt * 4);
+  grayPass.uniforms.inspect.value += ((things.examining ? 1 : lean * 0.5) - grayPass.uniforms.inspect.value) * Math.min(1, dt * 6);
   if (Math.abs(camera.fov - fovTarget) > 0.01) { camera.fov += (fovTarget - camera.fov) * Math.min(1, dt * 5); camera.updateProjectionMatrix(); }
   grayPass.uniforms.time.value = (now / 1000) % 100;
   room.detectorLed.emissiveIntensity = (now % 4000) < 140 ? 3 : 0;
   ui.cross.classList.toggle('hot', !!hovered);
   ui.cross.style.opacity = busy() ? 0 : 1;
   ui.cross.style.left = ((dot.x + 1) * 50).toFixed(2) + '%'; ui.cross.style.top = ((1 - dot.y) * 50).toFixed(2) + '%';
-  const hintText = desk.at ? 'RIGHT-CLICK · LEAN BACK' : drums.on ? 'LEFT / RIGHT CLICK · DRUM      Q · PUT THE PENCILS DOWN' : recline.on && !recline.asleep && !recline.out && recline.lean >= 1 ? 'CLICK · SIT UP' : '';
+  const hintText = things.examining ? 'MOUSE · TURN IT OVER      WHEEL · CLOSER      E · PUT IT BACK' : things.phoneUp && !busy() ? '0 – 9 · DIAL      CLICK THE PHONE · HANG UP'
+    : hovered && hovered.obj && hovered.obj.userData.examine && !held ? (hovered.kind === 'examine' ? 'E · LOOK CLOSER' : 'CLICK · USE      E · LOOK CLOSER') : desk.at ? 'RIGHT-CLICK · LEAN BACK' : drums.on ? 'LEFT / RIGHT CLICK · DRUM      Q · PUT THE PENCILS DOWN' : recline.on && !recline.asleep && !recline.out && recline.lean >= 1 ? 'CLICK · SIT UP' : '';
   if (hintText) deskHint.textContent = hintText;
   deskHint.style.opacity = hintText && !replay ? 1 : 0;
   popup.classList.toggle('high', desk.k > 0);   // at the computer, notes appear above the screen instead of over it
+  gtao.scene = renderPass.scene; gtao.camera = renderPass.camera;      // whoever owns the view (dream, replay cam, glitch cam)
+  gtao.enabled = TUNE.ao > 0 && renderPass.scene === scene;
   composer.render();
 
   fpsAcc += dt; fpsN++;
@@ -1444,7 +1523,10 @@ window.__op = {
   ballPos: (p) => ({ x: p.body.position.x, y: p.body.position.y, z: p.body.position.z }),
   setColor(v) { colorBase = v - brain.cognition() * TUNE.colorFromCognition; grayPass.uniforms.saturation.value = v; ui.sat.value = v; },
   fps: () => fps,
-  brain, journal, loadedSave, pc, desk, camera, pointAtScreen,
+  brain, journal, loadedSave, pc, desk, camera, pointAtScreen, things, peek, scene, renderer, gtao, bloom, sun,
+  use() { useHovered(); }, zoom(v) { zoomLevel = v; },
+  // draw one frame right now (the preview pane doesn't always run the loop)
+  draw(yaw, pitch) { if (yaw !== undefined) this.look(yaw, pitch); step(1 / 60); gtao.scene = renderPass.scene; gtao.camera = renderPass.camera; composer.render(); },
   sit: () => enterDesk(), leave: () => leaveDesk(),
   recline, drums, drumHit, leaveDrums, sitUp,
   flight: () => flight, replay: () => replay, dreaming: () => dreaming, busy,

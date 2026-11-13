@@ -40,8 +40,9 @@ export const GrayFilterShader = {
       float l = dot(c.rgb, vec3(0.299, 0.587, 0.114));
       vec3 col = mix(vec3(l), c.rgb, saturation);
       // flat, tired contrast that perks up a little as color returns
-      float flatness = mix(0.86, 1.0, saturation);
-      col = mix(vec3(0.46), col, flatness);
+      float flatness = mix(0.93, 1.0, saturation);
+      col = mix(vec3(0.42), col, flatness);
+      col = mix(col, col * col * (3.0 - 2.0 * col), 0.3);     // a gentle film curve: deeper shadows, cleaner whites
       // faint cool office tint when gray
       col *= mix(vec3(0.97, 0.99, 1.02), vec3(1.0), saturation);
       vec2 d = vUv - 0.5;

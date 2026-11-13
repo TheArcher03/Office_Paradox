@@ -150,3 +150,51 @@ export function knock() {
   pattern.forEach((t) => setTimeout(() => { burst(0.09, 150, 1.2, 0.5, -0.8); burst(0.05, 420, 1.5, 0.12, -0.8); }, t * 1000));
 }
 export function glitch() { burst(0.5, 2400, 0.4, 0.22); tone(58, 0.7, 0.07, 'sawtooth', 40); }
+
+// ---- The detail pass: the small sounds of using things
+export function switchClick() { burst(0.02, 2600, 2.5, 0.22); burst(0.03, 700, 1.5, 0.1); }
+export function staple() { burst(0.05, 480, 1.4, 0.55); setTimeout(() => burst(0.03, 2600, 2, 0.22), 70); }
+export function drawer(opening) { burst(0.34, 240, 0.7, 0.32); burst(0.3, 1100, 0.8, 0.04); setTimeout(() => burst(0.05, opening ? 700 : 420, 1.5, opening ? 0.22 : 0.4), opening ? 330 : 270); }
+export function sip() { burst(0.4, 1500, 1.3, 0.045); setTimeout(() => burst(0.07, 520, 1.5, 0.09), 620); }
+export function mugDown() { burst(0.04, 900, 2, 0.28); ring(1700, 0.02, 0.18); }
+export function clack(v = 1) { burst(0.012, 4200, 5, 0.16 * v); ring(5200, 0.018 * v, 0.07); }
+export function creak() { tone(132, 0.28, 0.022, 'sawtooth', 92); burst(0.22, 380, 1, 0.07); }
+export function handset(up) { burst(0.04, up ? 1400 : 700, 1.6, 0.3); if (!up) setTimeout(() => burst(0.03, 500, 1.4, 0.25), 60); }
+export function lift() { burst(0.16, 700, 0.6, 0.05); }
+const DTMF = { 1: [697, 1209], 2: [697, 1336], 3: [697, 1477], 4: [770, 1209], 5: [770, 1336], 6: [770, 1477], 7: [852, 1209], 8: [852, 1336], 9: [852, 1477], '*': [941, 1209], 0: [941, 1336], '#': [941, 1477] };
+function pair(f1, f2, dur, gain) {
+  if (!ctx || ctx.state !== 'running') return;
+  const t = ctx.currentTime, g = ctx.createGain();
+  g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(gain, t + 0.012); g.gain.setValueAtTime(gain, t + dur - 0.02); g.gain.linearRampToValueAtTime(0.0001, t + dur);
+  g.connect(master);
+  for (const f of [f1, f2]) { const o = ctx.createOscillator(); o.frequency.value = f; o.connect(g); o.start(t); o.stop(t + dur + 0.02); }
+}
+export function dtmf(d, gain = 0.035, dur = 0.16) { const f = DTMF[d]; if (f) pair(f[0], f[1], dur, gain); }
+export function ringback() { pair(440, 480, 1.3, 0.022); }
+export function busy() { pair(480, 620, 0.26, 0.022); }
+export function beep() { pair(1000, 1000, 0.5, 0.02); }
+export function lineKnock() { [0, 0.54, 0.81, 1.08].forEach((t) => setTimeout(() => { burst(0.09, 170, 1.2, 0.12, -0.5); burst(0.05, 420, 1.5, 0.03, -0.5); }, t * 1000)); }
+// sounds that keep going until you stop them: the dial tone, an open phone line, the fan
+const loops = {};
+export function loop(name, level) {
+  if (!ctx || ctx.state !== 'running') return;
+  let l = loops[name];
+  if (!l) {
+    if (!level) return;
+    const g = ctx.createGain(); g.gain.value = 0; g.connect(master);
+    const osc = (f, type = 'sine', gain = 1) => { const o = ctx.createOscillator(); o.type = type; o.frequency.value = f; const og = ctx.createGain(); og.gain.value = gain; o.connect(og); og.connect(g); o.start(); };
+    const noise = (freq, q, gain) => {
+      const n = ctx.sampleRate * 2, b = ctx.createBuffer(1, n, ctx.sampleRate), d = b.getChannelData(0);
+      for (let i = 0; i < n; i++) d[i] = Math.random() * 2 - 1;
+      const s = ctx.createBufferSource(); s.buffer = b; s.loop = true;
+      const f = ctx.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = freq; f.Q.value = q;
+      const ng = ctx.createGain(); ng.gain.value = gain; s.connect(f); f.connect(ng); ng.connect(g); s.start();
+    };
+    if (name === 'dial') { osc(350); osc(440); }
+    if (name === 'line') { noise(1800, 0.5, 0.5); osc(60, 'sine', 0.25); }
+    if (name === 'fan') { noise(420, 0.6, 1); osc(98, 'triangle', 0.22); osc(196, 'sine', 0.08); }
+    l = loops[name] = { g };
+  }
+  l.g.gain.cancelScheduledValues(ctx.currentTime);
+  l.g.gain.setTargetAtTime(level, ctx.currentTime, 0.08);
+}
