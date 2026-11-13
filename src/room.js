@@ -458,6 +458,20 @@ export function buildRoom(scene, world) {
   const canProp = addProp('trashCan', canGroup, null, 0.9, canX, 0.001, canZ, { shapes: canShapes, sound: 'metal', linDamp: 0.15, angDamp: 0.5 });
   const trashCan = { get x() { return canProp.body.position.x; }, get z() { return canProp.body.position.z; }, r: canR, h: canH, prop: canProp };
 
+  // ---- The desk plant: not here at first. It turns up on the morning of Day 3, in the corner of the desk.
+  const plant = new THREE.Group(); plant.position.set(0.98, DT, -1.02); plant.visible = false; scene.add(plant);
+  const pot = new THREE.Mesh(new THREE.CylinderGeometry(0.065, 0.048, 0.1, 16), std({ color: '#b5613c', roughness: 0.9 })); pot.position.y = 0.05; plant.add(pot);
+  const soil = new THREE.Mesh(new THREE.CircleGeometry(0.06, 16), std({ color: '#3a2a1e', roughness: 1 })); soil.rotation.x = -Math.PI / 2; soil.position.y = 0.097; plant.add(soil);
+  const leafMat = std({ color: '#3f9a4e', roughness: 0.7, side: THREE.DoubleSide });
+  for (let i = 0; i < 7; i++) {
+    const a = (i / 7) * Math.PI * 2 + (i % 2) * 0.3, len = 0.13 + (i % 3) * 0.035;
+    const leaf = new THREE.Mesh(new THREE.SphereGeometry(1, 8, 6), leafMat);
+    leaf.scale.set(0.028, len / 2, 0.006);
+    const stem = new THREE.Group(); stem.position.y = 0.095; stem.rotation.set(0, a, 0.35 + (i % 3) * 0.22, 'YXZ');
+    leaf.position.y = len / 2; stem.add(leaf); plant.add(stem);
+  }
+  plant.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+
   // ---- Rolling chair
   const chair = new THREE.Group(); scene.add(chair);
   const chairFabric = std({ color: '#33415e', roughness: 1 });
@@ -562,7 +576,7 @@ export function buildRoom(scene, world) {
 
   return {
     props, colliders, chair, chairBody, clock: { hourHand, minHand, secHand, group: clock }, trashCan, physMat,
-    detectorLed: ledMat, panels, GROUP, impact, spawnSheet, dispensers: [stack], makeCrumple, addBall, addPlane, lever, pencilCup: cup, detector, removeProp, shredder, calendar: cal, computer, screen, printerOut, corkboard, pinSheet, pinned, unpinOldest, makeSheet,
+    detectorLed: ledMat, panels, GROUP, impact, spawnSheet, dispensers: [stack], makeCrumple, addBall, addPlane, plant, lever, pencilCup: cup, detector, removeProp, shredder, calendar: cal, computer, screen, printerOut, corkboard, pinSheet, pinned, unpinOldest, makeSheet,
     monitorView: { x: monX, y: monY + 0.01, z: monFront + 0.001, h: 0.265 }, stackTop: new THREE.Vector3(stackX, DT + 0.07, stackZ),
   };
 }

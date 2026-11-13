@@ -142,3 +142,11 @@ export function drum(lane, good) {
   if (good) ring(lane === 0 ? 1318 : 880, 0.012, 0.12);
 }
 export function lever() { burst(0.05, 900, 2, 0.3); burst(0.3, 300, 0.8, 0.12); }
+
+// ---- Stage 5 sounds
+// something on the other side of the wall knocks your rhythm back
+export function knock() {
+  const pattern = [0, 0.54, 0.81, 1.08, 1.62, 1.89];
+  pattern.forEach((t) => setTimeout(() => { burst(0.09, 150, 1.2, 0.5, -0.8); burst(0.05, 420, 1.5, 0.12, -0.8); }, t * 1000));
+}
+export function glitch() { burst(0.5, 2400, 0.4, 0.22); tone(58, 0.7, 0.07, 'sawtooth', 40); }

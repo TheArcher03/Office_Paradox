@@ -110,6 +110,18 @@ export function spreadsheet() {
 
 export function calendar() {
   const [c, g] = canvas(256, 360);
+  drawCalendarPage(g);
+  const t = tex(c);
+  for (let d = 1; d <= CALENDAR.crossedAtStart; d++) crossDay(t, d);   // someone was keeping up, then stopped
+  return t;
+}
+// Overnight, someone puts the calendar back the way it was.
+export function resetCalendar(t) {
+  drawCalendarPage(t.image.getContext('2d'));
+  for (let d = 1; d <= CALENDAR.crossedAtStart; d++) crossDay(t, d);
+  t.needsUpdate = true;
+}
+function drawCalendarPage(g) {
   g.fillStyle = '#f3f0e6'; g.fillRect(0, 0, 256, 360);
   // picture: a lake and mountains (the only "nature" in the room)
   const sky = g.createLinearGradient(0, 0, 0, 150);
@@ -135,9 +147,6 @@ export function calendar() {
     if (day > 31) break;
     g.fillText(String(day++), 15 + k * 33.1, 226 + r * 27);
   }
-  const t = tex(c);
-  for (let d = 1; d <= CALENDAR.crossedAtStart; d++) crossDay(t, d);   // someone was keeping up, then stopped
-  return t;
 }
 // The calendar's month: whoever sat here crossed off the first days, then stopped.
 export const CALENDAR = { days: 31, crossedAtStart: 11 };

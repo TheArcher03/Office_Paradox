@@ -49,7 +49,7 @@ export const TASKS = {
 export const PROTOTYPE_POINTS = 120;
 const SAVE_KEY = 'office-paradox-save-v1';
 
-const fresh = () => ({ v: 1, done: {}, order: [], points: 0, clockSec: 9 * 3600, day: 1, calendarDay: null, baskets: 0, pcOn: false, ufoBest: 0, pinned: [] });
+const fresh = () => ({ v: 1, done: {}, order: [], points: 0, clockSec: 9 * 3600, day: 1, calendarDay: null, baskets: 0, pcOn: false, ufoBest: 0, pinned: [], hints: [], planeOver: 0, ended: false });
 
 export function createBrain({ onComplete = () => {} } = {}) {
   let state = fresh();

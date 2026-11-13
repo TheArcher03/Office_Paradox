@@ -7,7 +7,8 @@ export const GrayFilterShader = {
     time: { value: 0 },
     vignette: { value: 0.32 },
     inspect: { value: 0 },
-    cctv: { value: 0 },        // 1 = the security-camera look (replays)
+    cctv: { value: 0 },
+    glitch: { value: 0 },      // 0..1: the picture tears sideways        // 1 = the security-camera look (replays)
   },
   vertexShader: /* glsl */`
     varying vec2 vUv;
@@ -20,10 +21,15 @@ export const GrayFilterShader = {
     uniform float vignette;
     uniform float inspect;
     uniform float cctv;
+    uniform float glitch;
     varying vec2 vUv;
     float rand(vec2 co) { return fract(sin(dot(co, vec2(12.9898, 78.233))) * 43758.5453); }
     void main() {
       vec2 uv = vUv;
+      if (glitch > 0.0) {
+        float band = floor(uv.y * 26.0);
+        uv.x += (rand(vec2(band, floor(time * 40.0))) - 0.5) * 0.22 * glitch;
+      }
       if (cctv > 0.5) {
         // cheap camera: chunky pixels and a little barrel bulge
         vec2 q = uv - 0.5;
@@ -49,6 +55,11 @@ export const GrayFilterShader = {
         col *= 0.86 + 0.14 * sin(vUv.y * 520.0);
         col += (rand(uv * 311.0 + time * 3.0) - 0.5) * 0.16;
         col *= 1.0 - smoothstep(0.35, 0.75, length(vUv - 0.5)) * 0.6;
+      }
+      if (glitch > 0.0) {
+        float r2 = texture2D(tDiffuse, uv + vec2(0.012 * glitch, 0.0)).r;
+        col.r = mix(col.r, r2, 0.8); col.b = mix(col.b, 1.0 - col.b, 0.25 * glitch);
+        col += (rand(uv * 97.0 + time * 7.0) - 0.5) * 0.25 * glitch;
       }
       gl_FragColor = vec4(col, c.a);
     }

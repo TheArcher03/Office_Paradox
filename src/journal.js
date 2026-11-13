@@ -1,6 +1,7 @@
 // The journal (J): written entries for things you've already done, in the character's handwriting.
 // The very last page is reserved for hint doodles. It stays empty until a player stalls (Stage 5).
 import { clockLabel } from './brain.js';
+import { doodleSvg } from './doodles.js';
 
 const PER_PAGE = 2;
 
@@ -17,7 +18,12 @@ export function createJournal(brain, { onTurn = () => {} } = {}) {
     const back = page === n - 1;
     el.classList.toggle('back', back);
     body.innerHTML = '';
-    if (!back) {
+    if (back) {
+      // doodles only, no words: one for each time you got stuck
+      const grid = document.createElement('div'); grid.className = 'doodles';
+      grid.innerHTML = (brain.state.hints || []).map((id, i) => doodleSvg(id, i)).join('');
+      body.append(grid);
+    } else {
       for (const e of entries.slice(page * PER_PAGE, page * PER_PAGE + PER_PAGE)) {
         const d = document.createElement('div'); d.className = 'entry';
         const h = document.createElement('div'); h.className = 'when'; h.textContent = `Day ${e.day} · ${clockLabel(e.clockSec)}`;

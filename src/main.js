@@ -10,11 +10,12 @@ import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { buildRoom, ROOM } from './room.js';
 import { GrayFilterShader } from './grayFilter.js';
 import * as Audio from './audio.js';
-import { createBrain } from './brain.js';
+import { createBrain, TASKS } from './brain.js';
+import { HINT_ORDER } from './doodles.js';
 import { createJournal } from './journal.js';
 import { createComputer } from './computer.js';
 import { createDream } from './dream.js';
-import { crossDay, CALENDAR } from './textures.js';
+import { crossDay, resetCalendar, CALENDAR } from './textures.js';
 
 // ---------- Tuning knobs (change these to adjust the feel) ----------
 const TUNE = {
@@ -40,6 +41,9 @@ const TUNE = {
   dizzyFrom: 3,             // turns before the room starts to swim
   crossEvery: 0.17,         // seconds between calendar X's while you hold the button
   shredTime: 1.5,           // seconds for the shredder to eat a sheet
+  // Stage 5
+  dayRate: 60,              // game seconds per real second: 9:00 to 5:00 takes 8 real minutes
+  hintAfter: 240,           // seconds without a new discovery before a hint doodle appears in the journal
   // Stage 4
   foldHold: 0.25,           // hold the button this long on a flat sheet and you start folding instead of crumpling
   foldTime: 1.15,           // seconds to fold a paper airplane (keep holding)
@@ -133,6 +137,7 @@ const brain = createBrain({
     popupTimer = setTimeout(() => popup.classList.remove('show'), 4500);
     Audio.chime();
     if (task.replay !== false) replayQueue = { wait: 0.55, age: 0 };
+    stall = 0;
   },
 });
 const loadedSave = brain.load();
@@ -239,7 +244,7 @@ window.addEventListener('keydown', (e) => {
   if (paused) return;
   keys.add(e.code);
   if (e.repeat) return;
-  if (replay || dreaming) return;
+  if (replay || dreaming || dayEnd) return;
   if (drums.on) {
     if (e.repeat) return;
     if (e.code === 'KeyA' || e.code === 'ArrowLeft') drumHit(0);
@@ -294,6 +299,7 @@ window.addEventListener('mousedown', (e) => {
   if (paused) return;
   if (journal.open) { journal.turn(e.button === 2 ? -1 : 1); return; }
   if (e.target !== canvas) return;
+  if (dayEnd) { if (dayEnd.card) dayEnd.go = true; return; }
   if (replay || dreaming || flight) return;
   if (desk.at) { if (e.button === 0) pc.click(); else if (e.button === 2) leaveDesk(); return; }
   if (drums.on) { drumHit(e.button === 2 ? 1 : 0); return; }
@@ -585,7 +591,7 @@ function checkBaskets() {
 // =====================================================================================================
 const moveToward = (v, target, step) => (v < target ? Math.min(target, v + step) : Math.max(target, v - step));
 // true while something other than plain sitting-and-looking has the view
-const busy = () => desk.k > 0 || recline.on || !!flight || drums.on || drums.k > 0 || !!replay || !!dreaming;
+const busy = () => desk.k > 0 || recline.on || !!flight || drums.on || drums.k > 0 || !!replay || !!dreaming || !!dayEnd;
 function forgetPaper(p) {
   const i = paper.indexOf(p); if (i >= 0) paper.splice(i, 1);
   if (highlighted === p.mesh) highlighted = null;
@@ -721,7 +727,7 @@ const drumHud = document.getElementById('drumHud'), drumG = drumHud.getContext('
 const cupPencils = props.filter((p) => p.name === 'pencil');
 function enterDrums() {
   if (held || crumple || drums.on) return;
-  Object.assign(drums, { on: true, t: 0, notes: [], streak: 0, nextStep: 0 });
+  Object.assign(drums, { on: true, t: 0, notes: [], streak: 0, best: 0, nextStep: 0 });
   player.spin = 0; keys.clear();
   cupPencils.forEach((p) => { p.mesh.visible = false; });
   sticks.visible = true;
@@ -731,6 +737,7 @@ function leaveDrums() {
   if (!drums.on) return;
   drums.on = false;
   cupPencils.forEach((p) => { p.mesh.visible = true; });
+  if (brain.state.day >= 2 && drums.best >= 8) knockTimer = 1.7;      // from Day 2 on, something answers
   // you end up looking at the spot you were drumming on
   player.yaw = Math.atan2(-(drumSpot.x - TUNE.seat.x), -(drumSpot.z - TUNE.seat.z)); lastYaw = player.yaw;
   player.pitch = -0.5;
@@ -986,6 +993,110 @@ function endReplay() {
   replay = null; tape.length = 0;
 }
 
+// =====================================================================================================
+// Stage 5 "Days & Mystery": the workday ends at 5:00, things change overnight, hint doodles turn up
+// when you're stuck, and the prototype ends with a glimpse from outside your own head.
+// =====================================================================================================
+const fadeEl = document.getElementById('fade'), fadeText = document.getElementById('fadeText'), endingEl = document.getElementById('ending');
+let dayEnd = null;         // the end-of-day sequence in progress
+let stall = 0;             // seconds since you last discovered something
+let knockTimer = 0;
+room.plant.visible = brain.state.day >= 3;
+
+// what the night shift does while you're gone
+function applyOvernight() {
+  const st = brain.state;
+  st.day++; st.clockSec = 9 * 3600;
+  // the calendar you crossed off is back the way it was
+  if (st.calendarDay > CALENDAR.crossedAtStart) { resetCalendar(calTex); st.calendarDay = CALENDAR.crossedAtStart; }
+  // the airplane you threw over the wall is back on your desk. Refolded. Neater than you made it.
+  if (st.planeOver > 0) {
+    const plane = room.addPlane(-0.5, ROOM.deskTop + 0.03, -0.63);
+    plane.body.quaternion.setFromEuler(0, 0.55, 0); plane.mesh.quaternion.copy(plane.body.quaternion);
+    trackPaper(plane);
+    st.planeOver = 0;
+  }
+  // every third day, something new
+  room.plant.visible = st.day >= 3;
+  stall = 0; tape.length = 0; replayQueue = null;
+  brain.save();
+}
+
+// ---- the third-person glitch: for half a second the view slips out of your head and behind you
+const thirdCam = new THREE.PerspectiveCamera(62, window.innerWidth / window.innerHeight, 0.05, 30);
+{
+  // only ever seen in the glitch: what is actually sitting in the chair
+  const stalkMat = new THREE.MeshStandardMaterial({ color: '#8fd98a', roughness: 0.8 });
+  const antenna = new THREE.Group(); antenna.visible = false;
+  const stalk = new THREE.Mesh(new THREE.CylinderGeometry(0.006, 0.006, 0.2, 5), stalkMat); stalk.position.set(0.02, 0.2, 0); stalk.rotation.z = -0.2;
+  const tip = new THREE.Mesh(new THREE.SphereGeometry(0.022, 8, 6), new THREE.MeshBasicMaterial({ color: '#f6ffb0' })); tip.position.set(0.04, 0.3, 0);
+  antenna.add(stalk, tip);
+  figure.userData.head.add(antenna);
+  figure.userData.antenna = antenna;
+}
+function showThirdPerson(on) {
+  figure.visible = on; figure.userData.antenna.visible = on;
+  if (on) {
+    figure.position.copy(chair.position); figure.rotation.y = chair.rotation.y;
+    figure.userData.head.rotation.set(player.pitch, player.yaw - chair.rotation.y, 0, 'YXZ');
+    const lim = ROOM.half - 0.12;
+    thirdCam.position.set(
+      THREE.MathUtils.clamp(TUNE.seat.x + Math.sin(player.yaw) * 0.95, -lim, lim), 1.62,
+      THREE.MathUtils.clamp(TUNE.seat.z + Math.cos(player.yaw) * 0.95, -lim, lim));
+    thirdCam.lookAt(TUNE.seat.x, 1.15, TUNE.seat.z);
+    thirdCam.aspect = window.innerWidth / window.innerHeight; thirdCam.updateProjectionMatrix();
+  }
+  renderPass.camera = on ? thirdCam : camera;
+}
+
+function startDayEnd() {
+  const st = brain.state;
+  const finale = !st.ended && (st.day >= 3 || st.order.length >= Object.keys(TASKS).length);
+  dayEnd = { t: 0, finale, glitchDone: !finale, card: false, go: false, applied: false, fadeFrom: 0 };
+  if (highlighted) { setGlow(highlighted, false); highlighted = null; }
+  hovered = null;
+  if (finale) Audio.glitch();
+}
+function updateDayEnd(dt) {
+  const d = dayEnd, st = brain.state;
+  d.t += dt;
+  const gl = grayPass.uniforms.glitch;
+  if (!d.glitchDone) {
+    // tear, out of your head, tear, back in. Then a long second to wonder what that was.
+    const t = d.t;
+    if (t < 0.15) gl.value = 1;
+    else if (t < 0.75) { if (renderPass.camera !== thirdCam) showThirdPerson(true); gl.value = 0.25 + Math.random() * 0.2; }
+    else if (t < 0.9) { if (renderPass.camera === thirdCam) showThirdPerson(false); gl.value = 1; }
+    else { gl.value = 0; if (t > 2.8) { d.glitchDone = true; d.t = 0; } }
+    return;
+  }
+  gl.value = 0;
+  if (!d.applied) {
+    // fade to black
+    fadeEl.style.opacity = Math.min(1, d.t / 1.6);
+    if (d.t >= 1.6) {
+      if (d.finale && !d.card) {
+        // the title card: the prototype ends here (you can keep playing)
+        d.card = true;
+        document.getElementById('endingFound').textContent = `You found ${st.order.length} of ${Object.keys(TASKS).length}.`;
+        endingEl.style.display = 'block';
+      }
+      if (!d.finale || d.go) {
+        endingEl.style.display = 'none';
+        if (d.finale) st.ended = true;
+        applyOvernight();
+        fadeText.textContent = `DAY ${st.day}`;
+        d.applied = true; d.t = 0;
+      }
+    }
+    return;
+  }
+  // the next morning
+  fadeText.style.opacity = d.t < 1.8 ? Math.min(1, d.t / 0.5) : Math.max(0, 1 - (d.t - 1.8) / 0.5);
+  fadeEl.style.opacity = d.t < 2.2 ? 1 : Math.max(0, 1 - (d.t - 2.2) / 1.6);
+  if (d.t >= 3.8) { fadeEl.style.opacity = 0; fadeText.style.opacity = 0; dayEnd = null; player.pitch = -0.18; }
+}
+
 // ---------- Each frame: look, chair, camera ----------
 function updatePlayer(dt) {
   const look = 1.9 * dt;   // arrow-key look (fallback)
@@ -1128,16 +1239,18 @@ function updateGlow() {
 }
 
 // ---------- Clock (starts at 9:00, ticks in real seconds for now) ----------
-let lastWholeSec = -1;
+let lastWholeSec = -1, realSec = 0;
 function updateClock(dt) {
-  brain.state.clockSec += dt;
-  const s = Math.floor(brain.state.clockSec);
-  if (s !== lastWholeSec) {
-    lastWholeSec = s;
-    const sec = s % 60, min = (s / 60) % 60, hr = (s / 3600) % 12;
-    clock.secHand.rotation.z = -(sec / 60) * Math.PI * 2;
-    clock.minHand.rotation.z = -(min / 60) * Math.PI * 2;
-    clock.hourHand.rotation.z = -(hr / 12) * Math.PI * 2;
+  // the workday runs fast: 9:00 to 5:00 in about eight real minutes. The second hand still ticks once a second.
+  brain.state.clockSec += dt * TUNE.dayRate;
+  realSec += dt;
+  const s = brain.state.clockSec;
+  clock.minHand.rotation.z = -((s / 60) % 60 / 60) * Math.PI * 2;
+  clock.hourHand.rotation.z = -((s / 3600) % 12 / 12) * Math.PI * 2;
+  const whole = Math.floor(realSec);
+  if (whole !== lastWholeSec) {
+    lastWholeSec = whole;
+    clock.secHand.rotation.z = -((whole % 60) / 60) * Math.PI * 2;
     if (!paused) {
       const toClock = new THREE.Vector3(clock.group.position.x - camera.position.x, 0, clock.group.position.z - camera.position.z).normalize();
       camera.getWorldDirection(fwd); right.set(-fwd.z, 0, fwd.x).normalize();
@@ -1179,6 +1292,16 @@ function step(dt) {
   const sat = grayPass.uniforms.saturation;
   sat.value += (colorTarget() - sat.value) * Math.min(1, dt * TUNE.colorEase);
   recordFrame(dt);
+  if (knockTimer > 0) { knockTimer -= dt; if (knockTimer <= 0) Audio.knock(); }
+  // stuck for a while? a doodle quietly appears on the back page of the journal
+  stall += dt;
+  if (stall > TUNE.hintAfter) {
+    stall = 0;
+    const next = HINT_ORDER.find((id) => !brain.isDone(id) && !brain.state.hints.includes(id));
+    if (next) { brain.state.hints.push(next); Audio.scratch(); brain.save(); }
+  }
+  // five o'clock: the day ends (once you've finished whatever you're in the middle of)
+  if (brain.state.clockSec >= 17 * 3600 && !busy() && !held && !crumple && !fold && !shred && !replayQueue && !journal.open) startDayEnd();
   if (replayQueue) {
     replayQueue.age += dt;
     if (replayQueue.age > 5) replayQueue = null;                       // too late to be an "instant" replay
@@ -1194,7 +1317,8 @@ function frame(now) {
   const dt = Math.min(0.05, (now - last) / 1000);
   last = now;
   if (!paused) {
-    if (replay) updateReplay(dt);
+    if (dayEnd) updateDayEnd(dt);
+    else if (replay) updateReplay(dt);
     else if (dreaming) updateDream(dt);
     else step(dt);
   }
@@ -1262,8 +1386,9 @@ window.__op = {
   sit: () => enterDesk(), leave: () => leaveDesk(),
   recline, drums, drumHit, leaveDrums, sitUp,
   flight: () => flight, replay: () => replay, dreaming: () => dreaming, busy,
+  dayEnd: () => dayEnd, room, stallBy(sec) { stall += sec; },
   // run whole frames (including replays and the dream), not just the normal game step
-  run(sec) { for (let t = 0; t < sec; t += 1 / 60) { if (replay) updateReplay(1 / 60); else if (dreaming) updateDream(1 / 60); else step(1 / 60); } },
+  run(sec) { for (let t = 0; t < sec; t += 1 / 60) { if (dayEnd) updateDayEnd(1 / 60); else if (replay) updateReplay(1 / 60); else if (dreaming) updateDream(1 / 60); else step(1 / 60); } },
   done: () => brain.state.order.slice(),
   color: () => grayPass.uniforms.saturation.value,
   hold(on) { mouseHeld = on; },
