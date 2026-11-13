@@ -382,7 +382,8 @@ export function createComputer({ brain, sfx = () => {}, onPrint = () => {}, onSc
     else {
       drawDesktop();
       // mouse pointer (tucked away while you're flying)
-      const { x, y } = game.state === 'play' && st.win === 'browser' ? { x: -40, y: -40 } : st.cur;
+      // (also not drawn when the player's own mouse cursor is doing the pointing)
+      const { x, y } = st.real || (game.state === 'play' && st.win === 'browser') ? { x: -40, y: -40 } : st.cur;
       g.fillStyle = '#fff'; g.strokeStyle = '#000'; g.lineWidth = 1.5;
       g.beginPath(); g.moveTo(x, y); g.lineTo(x, y + 17); g.lineTo(x + 4.5, y + 13); g.lineTo(x + 8, y + 20); g.lineTo(x + 10.5, y + 19); g.lineTo(x + 7, y + 12); g.lineTo(x + 12.5, y + 12); g.closePath(); g.fill(); g.stroke();
     }
@@ -405,9 +406,17 @@ export function createComputer({ brain, sfx = () => {}, onPrint = () => {}, onSc
       st.cur.x = THREE.MathUtils.clamp(st.cur.x + dx, 0, W - 4); st.cur.y = THREE.MathUtils.clamp(st.cur.y + dy, 0, H - 4);
       dirty = true;
     },
+    // the player's real mouse cursor does the pointing: x, y in screen pixels, or off the glass
+    point(x, y, onScreen) {
+      st.real = true; st.off = !onScreen;
+      st.cur.x = THREE.MathUtils.clamp(x, 0, W - 1); st.cur.y = THREE.MathUtils.clamp(y, 0, H - 1);
+      dirty = true;
+    },
+    // back to the drawn pointer (no real cursor to show)
+    drawnPointer() { if (st.real) { st.real = false; st.off = false; dirty = true; } },
     click() {
       if (st.power === 'off') { api.wake(); return; }
-      if (st.power !== 'on') return;
+      if (st.power !== 'on' || st.off) return;
       for (let i = hits.length - 1; i >= 0; i--) {
         const r = hits[i];
         if (st.cur.x >= r.x && st.cur.x <= r.x + r.w && st.cur.y >= r.y && st.cur.y <= r.y + r.h) { r.fn(); break; }
@@ -433,7 +442,7 @@ export function createComputer({ brain, sfx = () => {}, onPrint = () => {}, onSc
       if (dirty) redraw();
     },
     // for automated checks: put the pointer somewhere and click
-    clickAt(x, y) { st.cur.x = x; st.cur.y = y; redraw(); api.click(); redraw(); },
+    clickAt(x, y) { st.off = false; st.cur.x = x; st.cur.y = y; redraw(); api.click(); redraw(); },
   };
   redraw();
   return api;

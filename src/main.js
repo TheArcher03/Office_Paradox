@@ -234,12 +234,13 @@ function pause() { paused = true; ui.overlay.style.display = 'flex'; }
 
 document.addEventListener('pointerlockchange', () => {
   if (document.pointerLockElement === canvas) { fallbackLook = false; resume(); }
-  else if (started && !fallbackLook) pause();
+  else if (started && !fallbackLook && !desk.at) pause();   // at the computer the cursor is free on purpose
 });
-document.addEventListener('pointerlockerror', enterFallback);
+document.addEventListener('pointerlockerror', () => { if (desk.relock) { desk.relock = false; pause(); } else enterFallback(); });
 
 window.addEventListener('keydown', (e) => {
   if (e.code === 'Backquote') { ui.debug.style.display = ui.debug.style.display === 'block' ? 'none' : 'block'; return; }
+  if (e.code === 'Escape' && desk.at && desk.free && !paused) { leaveDesk(); return; }
   if (e.code === 'Escape' && fallbackLook && started) { paused ? resume() : pause(); return; }
   if (paused) return;
   keys.add(e.code);
@@ -275,9 +276,14 @@ window.addEventListener('blur', () => keys.clear());
 window.addEventListener('mousemove', (e) => {
   if (paused) return;
   const locked = document.pointerLockElement === canvas;
+  if (desk.at) {
+    // at the computer your real mouse cursor is the pointer; the drawn one is only for when the mouse is captured
+    if (locked) pc.move((e.movementX || 0) * TUNE.cursorSpeed, (e.movementY || 0) * TUNE.cursorSpeed);
+    else pointAtScreen(e);
+    return;
+  }
   if (!locked && !fallbackLook) return;
   if (journal.open) return;
-  if (desk.at) { pc.move((e.movementX || 0) * TUNE.cursorSpeed, (e.movementY || 0) * TUNE.cursorSpeed); return; }
   if (flight) {
     // in the air, the mouse steers the plane
     if (!flight.ending) {
@@ -301,7 +307,13 @@ window.addEventListener('mousedown', (e) => {
   if (e.target !== canvas) return;
   if (dayEnd) { if (dayEnd.card) dayEnd.go = true; return; }
   if (replay || dreaming || flight) return;
-  if (desk.at) { if (e.button === 0) pc.click(); else if (e.button === 2) leaveDesk(); return; }
+  if (desk.at) {
+    if (e.button === 2) { leaveDesk(); return; }
+    if (e.button !== 0) return;
+    if (document.pointerLockElement !== canvas) pointAtScreen(e);
+    pc.click();
+    return;
+  }
   if (drums.on) { drumHit(e.button === 2 ? 1 : 0); return; }
   if (recline.on) { sitUp(); return; }
   if (e.button === 0) { mouseHeld = true; click(); }
@@ -462,8 +474,32 @@ function enterDesk() {
   player.pitch = -0.12;
   keys.clear();
   pc.wake();
+  // let go of the mouse: your own cursor is the pointer while you're at the screen
+  desk.free = document.pointerLockElement === canvas;
+  if (desk.free) document.exitPointerLock();
+  else if (!fallbackLook) pc.drawnPointer();
 }
-function leaveDesk() { desk.at = false; desk.entering = false; pc.key('KeyS', false); }
+function leaveDesk() {
+  desk.at = false; desk.entering = false; pc.key('KeyS', false);
+  canvas.style.cursor = '';
+  if (desk.free) {
+    // take the mouse back for looking around; if the browser says no, the click-to-continue screen does it
+    desk.free = false; desk.relock = true;
+    try { const r = canvas.requestPointerLock(); if (r && r.catch) r.catch(() => {}); } catch { /* handled below */ }
+    setTimeout(() => { desk.relock = false; if (!document.pointerLockElement && !fallbackLook && !desk.at) pause(); }, 500);
+  }
+}
+// Where on the monitor's glass is the real mouse cursor? Tell the computer.
+const screenRay = new THREE.Raycaster(), screenNdc = new THREE.Vector2();
+function pointAtScreen(e) {
+  screenNdc.set((e.clientX / window.innerWidth) * 2 - 1, -(e.clientY / window.innerHeight) * 2 + 1);
+  screenRay.setFromCamera(screenNdc, camera);
+  room.screen.updateWorldMatrix(true, false);
+  const hit = screenRay.intersectObject(room.screen, false)[0];
+  if (hit && hit.uv) pc.point(hit.uv.x * 640, (1 - hit.uv.y) * 480, true);
+  else pc.point(-1, -1, false);
+  canvas.style.cursor = pc.playing ? 'none' : '';      // out of the way while you fly the UFO
+}
 const NO_TURN = new THREE.Quaternion();
 const deskPos = new THREE.Vector3();
 function updateDeskCamera(dt) {
@@ -1382,7 +1418,7 @@ window.__op = {
   ballPos: (p) => ({ x: p.body.position.x, y: p.body.position.y, z: p.body.position.z }),
   setColor(v) { colorBase = v - brain.cognition() * TUNE.colorFromCognition; grayPass.uniforms.saturation.value = v; ui.sat.value = v; },
   fps: () => fps,
-  brain, journal, loadedSave, pc, desk,
+  brain, journal, loadedSave, pc, desk, camera, pointAtScreen,
   sit: () => enterDesk(), leave: () => leaveDesk(),
   recline, drums, drumHit, leaveDrums, sitUp,
   flight: () => flight, replay: () => replay, dreaming: () => dreaming, busy,
