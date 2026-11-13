@@ -20,6 +20,11 @@ import { crossDay, resetCalendar, CALENDAR } from './textures.js';
 // ---------- Tuning knobs (change these to adjust the feel) ----------
 const TUNE = {
   lookSensitivity: 0.0022,
+  // The dot is a cursor: the mouse moves it around the view, and pushing it toward an edge turns your head.
+  dotSpeed: 1.0,            // how fast the dot follows the mouse
+  edgeZone: 0.58,           // how far from the middle (0 to 1) the dot has to be before the view starts turning
+  edgeTurn: 2.7,            // fastest turn (radians a second) with the dot hard against the left / right edge
+  edgeTilt: 1.5,            // fastest tilt with the dot against the top / bottom edge
   seat: { x: -0.25, z: -0.1 },   // the chair is locked here
   eyeSeated: 1.17,
   reach: 1.8,               // how far away you can pick paper up
@@ -180,6 +185,9 @@ let mouseHeld = false, crossTimer = 0, calendarFocus = 0;
 let highlighted = null;     // the object currently glowing
 const paper = props.filter((p) => p.grab);   // every loose sheet + ball, oldest first
 const raycaster = new THREE.Raycaster();
+// The dot: where on the view you're pointing (-1 to 1 each way, 0,0 is the middle), and the direction that is in the room.
+const dot = new THREE.Vector2(0, 0), aimDir = new THREE.Vector3();
+function aimRay() { raycaster.setFromCamera(dot, camera); aimDir.copy(raycaster.ray.direction); return raycaster; }
 const tmpV = new THREE.Vector3(), fwd = new THREE.Vector3(), right = new THREE.Vector3(), up = new THREE.Vector3();
 const handPos = new THREE.Vector3(), handQuat = new THREE.Quaternion();
 const sheetTilt = new THREE.Quaternion().setFromEuler(new THREE.Euler(1.0, 0.3, 0.12));
@@ -295,8 +303,15 @@ window.addEventListener('mousemove', (e) => {
   if (busy()) return;
   // ignore the occasional huge jump some browsers report under pointer lock
   const dx = THREE.MathUtils.clamp(e.movementX || 0, -300, 300), dy = THREE.MathUtils.clamp(e.movementY || 0, -300, 300);
-  player.yaw -= dx * TUNE.lookSensitivity;
-  player.pitch = THREE.MathUtils.clamp(player.pitch - dy * TUNE.lookSensitivity, -1.5, 1.45);
+  if (locked) {
+    // the mouse moves the dot; the dot turns the view when it nears an edge (see updatePlayer)
+    dot.x = THREE.MathUtils.clamp(dot.x + dx * TUNE.dotSpeed * 2 / window.innerWidth, -0.97, 0.97);
+    dot.y = THREE.MathUtils.clamp(dot.y - dy * TUNE.dotSpeed * 2 / window.innerHeight, -0.95, 0.95);
+  } else {
+    // no mouse capture: the dot sits under the real cursor
+    dot.x = THREE.MathUtils.clamp((e.clientX / window.innerWidth) * 2 - 1, -0.97, 0.97);
+    dot.y = THREE.MathUtils.clamp(-(e.clientY / window.innerHeight) * 2 + 1, -0.95, 0.95);
+  }
 });
 
 canvas.addEventListener('contextmenu', (e) => e.preventDefault());
@@ -455,7 +470,8 @@ const angleTo = (from, to) => { let d = (to - from) % (Math.PI * 2); if (d > Mat
 function toss() {
   if (!held || held.kind !== 'ball') return null;
   updateHand('ball');
-  const aim = tmpV.copy(camera.position).addScaledVector(fwd, TUNE.throwConverge);
+  aimRay();
+  const aim = tmpV.copy(camera.position).addScaledVector(aimDir, TUNE.throwConverge);
   const dir = aim.sub(handPos).normalize();
   dir.y += TUNE.throwLift; dir.normalize();
   held.prop.mesh.position.copy(handPos);
@@ -543,7 +559,7 @@ function updatePrint(dt) {
 
 // ---------- The corkboard ----------
 function pinHeld() {
-  raycaster.setFromCamera({ x: 0, y: 0 }, camera);
+  aimRay();
   raycaster.far = TUNE.useReach;
   const hit = raycaster.intersectObject(room.corkboard, false)[0];
   if (!hit) return;
@@ -685,7 +701,8 @@ function isShown(o) { while (o) { if (!o.visible) return false; o = o.parent; } 
 function launchPlane() {
   updateHand('plane');
   const p = held.prop; held = null;
-  flight = { prop: p, pos: handPos.clone(), yaw: player.yaw, pitch: THREE.MathUtils.clamp(player.pitch + 0.1, -0.5, 0.6), speed: TUNE.planeSpeed, t: 0, k: 0, ending: false, bank: 0, turn: 0 };
+  aimRay();                                             // it flies off toward the dot
+  flight = { prop: p, pos: handPos.clone(), yaw: Math.atan2(-aimDir.x, -aimDir.z), pitch: THREE.MathUtils.clamp(Math.asin(aimDir.y) + 0.1, -0.5, 0.6), speed: TUNE.planeSpeed, t: 0, k: 0, ending: false, bank: 0, turn: 0 };
   Audio.whoosh(0.3);
 }
 function updateFlight(dt) {
@@ -1141,6 +1158,13 @@ function updatePlayer(dt) {
   if (keys.has('ArrowUp')) player.pitch = Math.min(1.45, player.pitch + look * 0.8);
   if (keys.has('ArrowDown')) player.pitch = Math.max(-1.5, player.pitch - look * 0.8);
 
+  // the dot near an edge turns your head that way, faster the closer it is to the edge
+  if (dt > 0 && !paused && !journal.open && !busy()) {
+    const push = (v) => { const k = Math.max(0, (Math.abs(v) - TUNE.edgeZone) / (0.96 - TUNE.edgeZone)); return Math.sign(v) * Math.min(1, k) ** 1.6; };
+    player.yaw -= push(dot.x) * TUNE.edgeTurn * dt;
+    player.pitch = THREE.MathUtils.clamp(player.pitch + push(dot.y) * TUNE.edgeTilt * dt, -1.5, 1.45);
+  }
+
   // A / D push the chair around; it glides to a stop
   if (!journal.open && !busy()) {
     const push = (keys.has('KeyA') ? 1 : 0) - (keys.has('KeyD') ? 1 : 0);
@@ -1219,7 +1243,7 @@ const lookables = [];
 function updateHover() {
   hovered = null;
   if (crumple || shred || fold || journal.open || busy()) return;
-  raycaster.setFromCamera({ x: 0, y: 0 }, camera);
+  aimRay();
   if (held) {
     // with a flat sheet in your hand, the shredder is something you can use it on
     if (held.kind !== 'sheet' || held.t < 1) return;
@@ -1242,14 +1266,14 @@ function updateHover() {
   raycaster.far = TUNE.useReach;
   if (raycaster.intersectObject(room.computer, true)[0]) { hovered = { kind: 'computer', obj: room.computer }; return; }
   // small things you can use: the pencil cup, and the lever on your chair
-  camera.getWorldDirection(fwd);
+  fwd.copy(aimDir);
   for (const [obj, kind, cone] of [[room.pencilCup, 'pencils', 0.085], [room.lever, 'lever', 0.13]]) {
     obj.getWorldPosition(tmpV).sub(camera.position);
     const d = tmpV.length();
     if (d < TUNE.useReach && tmpV.normalize().angleTo(fwd) < cone) { hovered = { kind, obj }; return; }
   }
   // aim assist: paper near the dot counts
-  camera.getWorldDirection(fwd);
+  fwd.copy(aimDir);
   let best = null, bestAngle = Infinity;
   for (const p of paper) {
     tmpV.copy(p.mesh.position).sub(camera.position);
@@ -1366,6 +1390,7 @@ function frame(now) {
   room.detectorLed.emissiveIntensity = (now % 4000) < 140 ? 3 : 0;
   ui.cross.classList.toggle('hot', !!hovered);
   ui.cross.style.opacity = busy() ? 0 : 1;
+  ui.cross.style.left = ((dot.x + 1) * 50).toFixed(2) + '%'; ui.cross.style.top = ((1 - dot.y) * 50).toFixed(2) + '%';
   const hintText = desk.at ? 'RIGHT-CLICK · LEAN BACK' : drums.on ? 'LEFT / RIGHT CLICK · DRUM      Q · PUT THE PENCILS DOWN' : recline.on && !recline.asleep && !recline.out && recline.lean >= 1 ? 'CLICK · SIT UP' : '';
   if (hintText) deskHint.textContent = hintText;
   deskHint.style.opacity = hintText && !replay ? 1 : 0;
@@ -1397,7 +1422,8 @@ window.addEventListener('resize', () => {
 window.__op = {
   TUNE, player, props, paper, world, camera, chair,
   start() { started = true; fallbackLook = true; resume(); },
-  look(yaw, pitch) { player.yaw = yaw; player.pitch = pitch; updatePlayer(0); scene.updateMatrixWorld(); updateHover(); },
+  dot, cursor(x, y) { dot.set(x, y); scene.updateMatrixWorld(); updateHover(); },
+  look(yaw, pitch) { dot.set(0, 0); player.yaw = yaw; player.pitch = pitch; updatePlayer(0); scene.updateMatrixWorld(); updateHover(); },
   // yaw / pitch that put the dot on a point in the room
   aimAt(x, y, z) {
     const dx = x - TUNE.seat.x, dz = z - TUNE.seat.z;
