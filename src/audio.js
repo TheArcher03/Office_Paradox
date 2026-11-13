@@ -122,3 +122,23 @@ export function printer(duration) {
   for (let k = 0; k < duration / 0.11; k++) setTimeout(() => { burst(0.09, 900 + (k % 4) * 260, 2.5, 0.07); if (k % 5 === 0) tone(1500 + (k % 3) * 200, 0.06, 0.008); }, k * 110);
 }
 export function pin() { burst(0.03, 1800, 2, 0.2); burst(0.05, 500, 1.2, 0.12); }
+
+// ---- Stage 4 sounds
+// a slow, warm chord that swells while you dream
+export function dream(duration) {
+  if (!ctx || ctx.state !== 'running') return;
+  const t = ctx.currentTime;
+  [220, 277.18, 329.63, 493.88, 659.26].forEach((f, i) => {
+    const o = ctx.createOscillator(); o.type = i < 3 ? 'sine' : 'triangle'; o.frequency.value = f * (1 + (i - 2) * 0.0015);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(i < 3 ? 0.03 : 0.012, t + 3 + i * 0.5);
+    g.gain.setValueAtTime(i < 3 ? 0.03 : 0.012, t + duration - 2.5); g.gain.linearRampToValueAtTime(0.0001, t + duration);
+    o.connect(g); g.connect(master); o.start(t); o.stop(t + duration + 0.1);
+  });
+}
+export function drum(lane, good) {
+  if (lane === 0) { burst(0.05, 1700, 2, 0.32); ring(1900, 0.045, 0.3); ring(2870, 0.02, 0.2); }      // pencil on the coffee mug
+  else { burst(0.07, 520, 1.6, 0.5); burst(0.03, 3000, 2, 0.1); }                                      // pencil on the desk
+  if (good) ring(lane === 0 ? 1318 : 880, 0.012, 0.12);
+}
+export function lever() { burst(0.05, 900, 2, 0.3); burst(0.3, 300, 0.8, 0.12); }

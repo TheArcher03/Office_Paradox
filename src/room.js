@@ -139,6 +139,19 @@ export function buildRoom(scene, world) {
     };
     return { mesh, set };
   }
+  // a folded paper airplane (a simple dart): nose toward -Z
+  function addPlane(x, y, z) {
+    const v = [
+      0, 0, -0.14,   0, 0.004, 0.1,   -0.09, 0.018, 0.1,     // left wing
+      0, 0, -0.14,   0.09, 0.018, 0.1,   0, 0.004, 0.1,      // right wing
+      0, 0, -0.14,   0, 0.004, 0.1,   0, -0.035, 0.085,      // keel
+    ];
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(v, 3));
+    g.computeVertexNormals();
+    const m = new THREE.Mesh(g, std({ color: '#f4f1e8', roughness: 1, side: THREE.DoubleSide, flatShading: true }));
+    return addProp('plane', m, new CANNON.Box(new CANNON.Vec3(0.06, 0.012, 0.11)), 0.006, x, y, z, { sound: 'paper', linDamp: 0.6, angDamp: 0.7, grab: true, kind: 'plane' });
+  }
   // paper is light and lumpy: lots of air drag, and it stops rolling quickly
   function addBall(mesh, x, y, z) {
     return addProp('paperBall', mesh, new CANNON.Sphere(BALL_R), 0.012, x, y, z, { sound: 'paper', linDamp: 0.12, angDamp: 0.75, grab: true });
@@ -464,6 +477,11 @@ export function buildRoom(scene, world) {
     const wheel = new THREE.Mesh(new THREE.SphereGeometry(0.028, 10, 8), chairBlack);
     wheel.position.set(Math.sin(a) * 0.29, 0.028, Math.cos(a) * 0.29); chair.add(wheel);
   }
+  // the recline lever, at the front-right corner of the seat
+  const lever = new THREE.Group(); lever.position.set(0.3, 0.47, -0.2); chair.add(lever);
+  const leverArm = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.02, 0.16), std({ color: '#1b1b1d', roughness: 0.5, metalness: 0.3 })); leverArm.position.set(0, 0, -0.04); lever.add(leverArm);
+  const leverKnob = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.028, 0.07), std({ color: '#8a2f2a', roughness: 0.5 })); leverKnob.position.set(0, 0.004, -0.14); lever.add(leverKnob);
+  lever.userData.use = 'lever';
   chair.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
   chair.userData.chair = true;
   const chairBody = new CANNON.Body({ mass: 0, type: CANNON.Body.KINEMATIC, material: physMat, collisionFilterGroup: GROUP.PLAYER, collisionFilterMask: GROUP.PROP });
@@ -498,6 +516,7 @@ export function buildRoom(scene, world) {
   const cupX = 0.28, cupZ = -1.12;
   const cup = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.035, 0.1, 18, 1, true), std({ color: '#2a2a2a', side: THREE.DoubleSide, roughness: 0.4, metalness: 0.4 }));
   cup.position.set(cupX, DT + 0.05, cupZ); cup.castShadow = true; scene.add(cup);
+  cup.userData.use = 'pencils';
   const cupBody = new CANNON.Body({ mass: 0, material: physMat });
   for (let i = 0; i < 8; i++) {
     const a = (i / 8) * Math.PI * 2; const q = new CANNON.Quaternion(); q.setFromEuler(0, -a, 0);
@@ -543,7 +562,7 @@ export function buildRoom(scene, world) {
 
   return {
     props, colliders, chair, chairBody, clock: { hourHand, minHand, secHand, group: clock }, trashCan, physMat,
-    detectorLed: ledMat, panels, GROUP, impact, spawnSheet, dispensers: [stack], makeCrumple, addBall, removeProp, shredder, calendar: cal, computer, screen, printerOut, corkboard, pinSheet, pinned, unpinOldest, makeSheet,
+    detectorLed: ledMat, panels, GROUP, impact, spawnSheet, dispensers: [stack], makeCrumple, addBall, addPlane, lever, pencilCup: cup, detector, removeProp, shredder, calendar: cal, computer, screen, printerOut, corkboard, pinSheet, pinned, unpinOldest, makeSheet,
     monitorView: { x: monX, y: monY + 0.01, z: monFront + 0.001, h: 0.265 }, stackTop: new THREE.Vector3(stackX, DT + 0.07, stackZ),
   };
 }

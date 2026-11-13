@@ -21,7 +21,7 @@ export const TASKS = {
     entry: 'The calendar was weeks behind. I crossed off every day I could not remember having. Now it agrees with me that today is today.',
   },
   ufoGame: {
-    points: 10, title: 'Out of Office',
+    points: 10, title: 'Out of Office', replay: false,
     entry: 'The network is down. There is a little game hiding behind the error page: a small traveler in a saucer, hopping rocks on somebody else\'s planet. I rooted for it more than I expected to.',
   },
   printCat: {
@@ -31,6 +31,18 @@ export const TASKS = {
   hangCat: {
     points: 16, title: 'Office Pet',
     entry: 'Pinned the cat to the corkboard, next to the memos. It watches the desk now. For the first time the cubicle looks like it belongs to someone.',
+  },
+  paperPlane: {
+    points: 10, title: 'Maiden Voyage',
+    entry: 'Folded a sheet into a dart, wings and all, and let it go. For a moment I was riding along right behind it. Then the wall. I would like to know what is on the other side of the wall.',
+  },
+  drums: {
+    points: 10, title: 'Desk Set',
+    entry: 'Two pencils, one desk, one coffee mug. I kept time until my hands knew the pattern better than I did. The quarterly numbers have never once had a beat.',
+  },
+  nap: {
+    points: 12, title: 'Out Like a Light', replay: false,
+    entry: 'Put my feet up on the desk, leaned back and let my eyes close. I dreamed of a place with two suns, and tall quiet people who seemed to know me. When I woke up it was five o\'clock.',
   },
 };
 // Rough total for all 10 prototype tasks plus small bonuses. Cognition = points / this.

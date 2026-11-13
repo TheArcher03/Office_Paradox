@@ -7,12 +7,13 @@ import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
-import { buildRoom } from './room.js';
+import { buildRoom, ROOM } from './room.js';
 import { GrayFilterShader } from './grayFilter.js';
 import * as Audio from './audio.js';
 import { createBrain } from './brain.js';
 import { createJournal } from './journal.js';
 import { createComputer } from './computer.js';
+import { createDream } from './dream.js';
 import { crossDay, CALENDAR } from './textures.js';
 
 // ---------- Tuning knobs (change these to adjust the feel) ----------
@@ -39,6 +40,20 @@ const TUNE = {
   dizzyFrom: 3,             // turns before the room starts to swim
   crossEvery: 0.17,         // seconds between calendar X's while you hold the button
   shredTime: 1.5,           // seconds for the shredder to eat a sheet
+  // Stage 4
+  foldHold: 0.25,           // hold the button this long on a flat sheet and you start folding instead of crumpling
+  foldTime: 1.15,           // seconds to fold a paper airplane (keep holding)
+  planeSpeed: 1.45,          // m/s when it leaves your hand (slow and floaty: the cubicle is small)
+  planeSteer: 0.0021,       // how much the mouse steers it
+  planeMinFlight: 0.4,      // seconds in the air before it counts as a real flight
+  drumStep: 0.27,           // seconds per step of the drum pattern
+  drumLead: 1.5,            // seconds a note takes to fall to the ring
+  drumWindow: 0.15,         // how close to the beat a hit has to be (seconds)
+  drumStreak: 16,           // clean hits in a row that count as "you can drum"
+  chairSlack: 0.95,         // radians you can look to either side before the chair swivels to follow
+  napDelay: 2.2,            // seconds reclined before your eyes start to close
+  dreamTime: 13,            // seconds the dream lasts
+  replayTime: 2.2,          // seconds of footage in a replay
   deskTime: 0.65,           // seconds to lean in to / back from the monitor
   screenFill: 0.84,         // how much of the view the screen fills when you lean in
   cursorSpeed: 1.0,         // mouse pointer speed on the computer
@@ -100,7 +115,8 @@ room.impact.fn = (p, e) => {
 
 // ---------- Post-processing (the gray filter) ----------
 const composer = new EffectComposer(renderer);
-composer.addPass(new RenderPass(scene, camera));
+const renderPass = new RenderPass(scene, camera);
+composer.addPass(renderPass);
 composer.addPass(new OutputPass());
 const grayPass = new ShaderPass(GrayFilterShader);
 grayPass.uniforms.saturation.value = TUNE.startColor;
@@ -116,6 +132,7 @@ const brain = createBrain({
     clearTimeout(popupTimer);
     popupTimer = setTimeout(() => popup.classList.remove('show'), 4500);
     Audio.chime();
+    if (task.replay !== false) replayQueue = { wait: 0.55, age: 0 };
   },
 });
 const loadedSave = brain.load();
@@ -161,6 +178,7 @@ const raycaster = new THREE.Raycaster();
 const tmpV = new THREE.Vector3(), fwd = new THREE.Vector3(), right = new THREE.Vector3(), up = new THREE.Vector3();
 const handPos = new THREE.Vector3(), handQuat = new THREE.Quaternion();
 const sheetTilt = new THREE.Quaternion().setFromEuler(new THREE.Euler(1.0, 0.3, 0.12));
+const planeTilt = new THREE.Quaternion().setFromEuler(new THREE.Euler(0.12, 0.3, 0));
 
 const ui = {
   overlay: document.getElementById('overlay'),
@@ -221,6 +239,16 @@ window.addEventListener('keydown', (e) => {
   if (paused) return;
   keys.add(e.code);
   if (e.repeat) return;
+  if (replay || dreaming) return;
+  if (drums.on) {
+    if (e.repeat) return;
+    if (e.code === 'KeyA' || e.code === 'ArrowLeft') drumHit(0);
+    if (e.code === 'KeyD' || e.code === 'ArrowRight') drumHit(1);
+    if (e.code === 'KeyQ' || e.code === 'KeyE') leaveDrums();
+    if (e.code.startsWith('Arrow')) e.preventDefault();
+    return;
+  }
+  if (recline.on || flight) return;
   if (desk.at) {
     // at the computer the keyboard belongs to the computer
     if (e.code === 'Space' || e.code.startsWith('Arrow')) e.preventDefault();
@@ -245,6 +273,15 @@ window.addEventListener('mousemove', (e) => {
   if (!locked && !fallbackLook) return;
   if (journal.open) return;
   if (desk.at) { pc.move((e.movementX || 0) * TUNE.cursorSpeed, (e.movementY || 0) * TUNE.cursorSpeed); return; }
+  if (flight) {
+    // in the air, the mouse steers the plane
+    if (!flight.ending) {
+      const sx = THREE.MathUtils.clamp(e.movementX || 0, -120, 120), sy = THREE.MathUtils.clamp(e.movementY || 0, -120, 120);
+      flight.yaw -= sx * TUNE.planeSteer; flight.pitch -= sy * TUNE.planeSteer * 0.7; flight.turn -= sx * 0.012;
+    }
+    return;
+  }
+  if (busy()) return;
   // ignore the occasional huge jump some browsers report under pointer lock
   const dx = THREE.MathUtils.clamp(e.movementX || 0, -300, 300), dy = THREE.MathUtils.clamp(e.movementY || 0, -300, 300);
   player.yaw -= dx * TUNE.lookSensitivity;
@@ -257,23 +294,27 @@ window.addEventListener('mousedown', (e) => {
   if (paused) return;
   if (journal.open) { journal.turn(e.button === 2 ? -1 : 1); return; }
   if (e.target !== canvas) return;
+  if (replay || dreaming || flight) return;
   if (desk.at) { if (e.button === 0) pc.click(); else if (e.button === 2) leaveDesk(); return; }
+  if (drums.on) { drumHit(e.button === 2 ? 1 : 0); return; }
+  if (recline.on) { sitUp(); return; }
   if (e.button === 0) { mouseHeld = true; click(); }
   else if (e.button === 2) putDown();
 });
-window.addEventListener('mouseup', (e) => { if (e.button === 0) mouseHeld = false; });
+window.addEventListener('mouseup', (e) => { if (e.button === 0) { mouseHeld = false; releasePress(); } });
 
 // One button does everything: empty hand → pick up paper. Flat sheet in hand → crumple it. Ball in hand → toss it.
 // (A flat sheet goes into the shredder instead, if that's what you're looking at.)
 function click() {
-  if (crumple) return;
+  if (crumple || fold) return;
   if (!held) { if (hovered) useHovered(); return; }
   if (held.t < 1) return;
   if (held.kind === 'sheet') {
     if (hovered && hovered.kind === 'shredder') startShred();
     else if (hovered && hovered.kind === 'corkboard') pinHeld();
-    else startCrumple();
+    else press = { t: 0 };          // a quick click crumples it (on release); holding folds it into a plane
   }
+  else if (held.kind === 'plane') launchPlane();
   else toss();
 }
 
@@ -288,6 +329,7 @@ function updateHand(kind) {
     .addScaledVector(up, TUNE.hand.up);
   handQuat.copy(camera.quaternion);
   if (kind === 'sheet') handQuat.multiply(sheetTilt);
+  if (kind === 'plane') handQuat.multiply(planeTilt);
 }
 
 // ---------- Picking paper up ----------
@@ -296,6 +338,8 @@ function useHovered() {
   if (hovered.kind === 'prop') { Audio.impact('paper', 0.6); grab(hovered.prop); }
   else if (hovered.kind === 'calendar') crossNextDay();
   else if (hovered.kind === 'computer') enterDesk();
+  else if (hovered.kind === 'pencils') enterDrums();
+  else if (hovered.kind === 'lever') startRecline();
   else if (hovered.kind === 'dispenser') {
     // take a fresh sheet off the top of the stack
     const s = room.stackTop;
@@ -322,7 +366,7 @@ function grab(p) {
   b.velocity.set(0, 0, 0); b.angularVelocity.set(0, 0, 0);
   b.wakeUp();
   held = {
-    prop: p, kind: p.name === 'paperBall' ? 'ball' : 'sheet', t: 0,
+    prop: p, kind: p.name === 'paperBall' ? 'ball' : p.name === 'plane' ? 'plane' : 'sheet', t: 0,
     fromPos: new THREE.Vector3().copy(b.position), fromQuat: new THREE.Quaternion().copy(b.quaternion),
   };
 }
@@ -342,7 +386,8 @@ function release(vel = null, spin = 0) {
   return p;
 }
 function putDown() {
-  if (crumple || !held || held.t < 1) return;
+  if (crumple || fold || !held || held.t < 1) return;
+  press = null;
   camera.getWorldDirection(fwd);
   release(tmpV.copy(fwd).multiplyScalar(0.5), 1);    // a gentle set-down in front of you
 }
@@ -535,6 +580,412 @@ function checkBaskets() {
   }
 }
 
+// =====================================================================================================
+// Stage 4 "Not Flat": the paper airplane, pencil drums, the nap, and the security-camera replay.
+// =====================================================================================================
+const moveToward = (v, target, step) => (v < target ? Math.min(target, v + step) : Math.max(target, v - step));
+// true while something other than plain sitting-and-looking has the view
+const busy = () => desk.k > 0 || recline.on || !!flight || drums.on || drums.k > 0 || !!replay || !!dreaming;
+function forgetPaper(p) {
+  const i = paper.indexOf(p); if (i >= 0) paper.splice(i, 1);
+  if (highlighted === p.mesh) highlighted = null;
+  room.removeProp(p);
+}
+
+// ---------- Folding a paper airplane: hold the button down on a flat sheet (a quick click still crumples) ----------
+let press = null, fold = null;
+function releasePress() {
+  if (!press) return;
+  press = null;
+  if (fold) cancelFold();
+  else if (held && held.kind === 'sheet' && held.t >= 1) startCrumple();
+}
+function startFold() {
+  const sheet = held.prop;
+  const c = room.makeCrumple(sheet.kind);
+  c.mesh.position.copy(sheet.mesh.position); c.mesh.quaternion.copy(sheet.mesh.quaternion);
+  scene.add(c.mesh);
+  fold = { mesh: c.mesh, kind: sheet.kind, t: 0, next: 0 };
+  held = null;
+  forgetPaper(sheet);
+}
+function cancelFold() {
+  // let go too soon: it's still just a sheet
+  scene.remove(fold.mesh);
+  updateHand('sheet');
+  const sheet = room.makeSheet(fold.kind, handPos.x, handPos.y, handPos.z);
+  fold = null;
+  trackPaper(sheet); grab(sheet); held.t = 1;
+}
+function updateFold(dt) {
+  const f = fold;
+  f.t = Math.min(1, f.t + dt / TUNE.foldTime);
+  updateHand('sheet');
+  const e = easeInOut(f.t);
+  f.mesh.position.copy(handPos); f.mesh.quaternion.copy(handQuat);
+  // in half the long way, then the wings come down
+  f.mesh.scale.set(1 - 0.62 * Math.min(1, e * 1.6), 1, 1 - 0.2 * Math.max(0, e * 2 - 1));
+  if (f.t >= f.next) { Audio.impact('paper', 0.4 + Math.random() * 0.4); f.next += 0.27; }
+  if (f.t >= 1) {
+    scene.remove(f.mesh);
+    updateHand('plane');
+    const plane = room.addPlane(handPos.x, handPos.y, handPos.z);
+    fold = null; press = null;
+    trackPaper(plane); grab(plane); held.t = 1;
+  }
+}
+
+// ---------- Flying it: the view rides along behind the plane, and the mouse steers gently ----------
+let flight = null;
+const flightDir = new THREE.Vector3(), chasePos = new THREE.Vector3(), chaseQuat = new THREE.Quaternion();
+const flightEuler = new THREE.Euler(0, 0, 0, 'YXZ');
+function isShown(o) { while (o) { if (!o.visible) return false; o = o.parent; } return true; }
+function launchPlane() {
+  updateHand('plane');
+  const p = held.prop; held = null;
+  flight = { prop: p, pos: handPos.clone(), yaw: player.yaw, pitch: THREE.MathUtils.clamp(player.pitch + 0.1, -0.5, 0.6), speed: TUNE.planeSpeed, t: 0, k: 0, ending: false, bank: 0, turn: 0 };
+  Audio.whoosh(0.3);
+}
+function updateFlight(dt) {
+  const f = flight, clamp = THREE.MathUtils.clamp;
+  if (!f.ending) {
+    f.t += dt;
+    f.speed = clamp(f.speed + (-Math.sin(f.pitch) * 2.0 - 0.07) * dt, 0.5, 3.6);   // dive to speed up, climb and it slows
+    if (f.speed < 0.85) f.pitch -= (0.85 - f.speed) * 2 * dt;                        // too slow: the nose drops
+    f.pitch = clamp(f.pitch, -1.1, 0.75);
+    flightDir.set(-Math.sin(f.yaw) * Math.cos(f.pitch), Math.sin(f.pitch), -Math.cos(f.yaw) * Math.cos(f.pitch));
+    const stepLen = f.speed * dt;
+    raycaster.set(f.pos, flightDir); raycaster.far = stepLen + 0.16;
+    const hit = raycaster.intersectObjects(scene.children, true).find((h) => h.object !== f.prop.mesh && !h.object.isPoints && isShown(h.object));
+    if (hit) { f.pos.addScaledVector(flightDir, Math.max(0, hit.distance - 0.15)); endFlight(false); }
+    else {
+      f.pos.addScaledVector(flightDir, stepLen); f.pos.y -= 0.08 * dt;
+      if (Math.abs(f.pos.x) > ROOM.half + 0.06 || Math.abs(f.pos.z) > ROOM.half + 0.06) endFlight(true);   // over the wall, and gone
+      else if (f.t > 14) endFlight(false);
+    }
+    f.bank += (clamp(f.turn, -0.7, 0.7) - f.bank) * Math.min(1, dt * 6);
+    f.turn *= Math.exp(-6 * dt);
+    flightEuler.set(f.pitch, f.yaw, f.bank);
+    const m = f.prop.mesh;
+    m.position.copy(f.pos); m.quaternion.setFromEuler(flightEuler);
+    f.prop.body.position.copy(m.position); f.prop.body.quaternion.copy(m.quaternion);
+    chasePos.copy(f.pos).addScaledVector(flightDir, -0.34); chasePos.y += 0.08;
+    const lim = ROOM.half - 0.08;
+    chasePos.set(clamp(chasePos.x, -lim, lim), clamp(chasePos.y, 0.12, ROOM.ceilingY - 0.1), clamp(chasePos.z, -lim, lim));
+    flightEuler.set(f.pitch - 0.12, f.yaw, f.bank * 0.4);
+    chaseQuat.setFromEuler(flightEuler);
+  }
+  f.k = clamp(f.k + (f.ending ? -dt / 0.7 : dt / 0.3), 0, 1);
+  if (f.ending && f.k <= 0) flight = null;
+}
+function endFlight(overWall) {
+  const f = flight, p = f.prop, b = p.body;
+  f.ending = true;
+  if (overWall) { forgetPaper(p); brain.state.planeOver = (brain.state.planeOver || 0) + 1; }
+  else {
+    b.type = CANNON.Body.DYNAMIC; b.mass = p.mass; b.updateMassProperties();
+    b.collisionFilterMask = GROUP.WORLD | GROUP.PROP;
+    b.position.copy(p.mesh.position); b.previousPosition.copy(b.position); b.interpolatedPosition.copy(b.position);
+    b.quaternion.copy(p.mesh.quaternion); b.previousQuaternion.copy(b.quaternion); b.interpolatedQuaternion.copy(b.quaternion);
+    b.velocity.set(flightDir.x * 0.3, 0, flightDir.z * 0.3); b.angularVelocity.set(0, 0, 0);
+    b.wakeUp();
+    Audio.impact('paper', 1.5);
+  }
+  if (f.t >= TUNE.planeMinFlight) brain.complete('paperPlane');
+}
+function applyFlightCamera() {
+  if (!flight || flight.k <= 0) return;
+  const e = easeInOut(flight.k);
+  camera.position.lerp(chasePos, e); camera.quaternion.slerp(chaseQuat, e);
+  camera.updateMatrixWorld();
+}
+
+// ---------- Pencil drums: click the pencil cup. Left stick is the coffee mug, right stick is the desk. ----------
+const DRUM_PATTERN = 'R.R.L.R.R.RRL.R.R.R.L.RLRLR.LLR.';
+const drums = { on: false, k: 0, t: 0, notes: [], streak: 0, best: 0, nextStep: 0, swing: [0, 0], flash: [0, 0] };
+const drumSpot = new THREE.Vector3(-0.68, ROOM.deskTop, -0.74);
+const drumCam = new THREE.PerspectiveCamera(); drumCam.position.set(-0.45, 1.13, -0.36); drumCam.lookAt(drumSpot);
+const sticks = new THREE.Group(); sticks.visible = false; scene.add(sticks);
+const stickMeshes = [-1, 1].map((side) => {
+  const g = new THREE.Group();
+  const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.0045, 0.0045, 0.17, 6), new THREE.MeshStandardMaterial({ color: '#e8b923', roughness: 0.6 }));
+  const tip = new THREE.Mesh(new THREE.CylinderGeometry(0.0047, 0.0047, 0.016, 8), new THREE.MeshStandardMaterial({ color: '#d98c8c' }));
+  shaft.position.y = 0.085; tip.position.y = 0.176;       // eraser end forward: that's the end you drum with
+  g.add(shaft, tip);
+  g.position.set(side * 0.1, -0.1, -0.2);
+  g.userData.side = side;
+  sticks.add(g);
+  return g;
+});
+const drumHud = document.getElementById('drumHud'), drumG = drumHud.getContext('2d');
+const cupPencils = props.filter((p) => p.name === 'pencil');
+function enterDrums() {
+  if (held || crumple || drums.on) return;
+  Object.assign(drums, { on: true, t: 0, notes: [], streak: 0, nextStep: 0 });
+  player.spin = 0; keys.clear();
+  cupPencils.forEach((p) => { p.mesh.visible = false; });
+  sticks.visible = true;
+  Audio.impact('pencil', 2);
+}
+function leaveDrums() {
+  if (!drums.on) return;
+  drums.on = false;
+  cupPencils.forEach((p) => { p.mesh.visible = true; });
+  // you end up looking at the spot you were drumming on
+  player.yaw = Math.atan2(-(drumSpot.x - TUNE.seat.x), -(drumSpot.z - TUNE.seat.z)); lastYaw = player.yaw;
+  player.pitch = -0.5;
+}
+function drumHit(lane) {
+  if (!drums.on) return;
+  drums.swing[lane] = 1;
+  let best = null;
+  for (const n of drums.notes) {
+    if (n.lane !== lane || n.hit || n.missed) continue;
+    const d = Math.abs(n.time - drums.t);
+    if (d < TUNE.drumWindow && (!best || d < Math.abs(best.time - drums.t))) best = n;
+  }
+  if (best) {
+    best.hit = true; drums.streak++; drums.best = Math.max(drums.best, drums.streak); drums.flash[lane] = 1;
+    if (drums.streak >= TUNE.drumStreak) brain.complete('drums');
+  } else drums.streak = 0;
+  Audio.drum(lane, !!best);
+}
+function updateDrums(dt) {
+  const d = drums;
+  d.k = THREE.MathUtils.clamp(d.k + (d.on ? 1 : -1) * dt / 0.6, 0, 1);
+  if (d.k <= 0) { sticks.visible = false; drumHud.style.opacity = 0; return; }
+  if (d.on) {
+    d.t += dt;
+    while (d.nextStep * TUNE.drumStep < d.t + TUNE.drumLead) {
+      const ch = DRUM_PATTERN[d.nextStep % DRUM_PATTERN.length];
+      if (ch !== '.') d.notes.push({ lane: ch === 'L' ? 0 : 1, time: 2 + d.nextStep * TUNE.drumStep });
+      d.nextStep++;
+    }
+    for (const n of d.notes) if (!n.hit && !n.missed && n.time < d.t - TUNE.drumWindow) { n.missed = true; d.streak = 0; }
+    d.notes = d.notes.filter((n) => n.time > d.t - 0.6);
+  }
+  // the two pencils, held in front of you; a hit flicks the tip down
+  sticks.position.copy(camera.position); sticks.quaternion.copy(camera.quaternion);
+  stickMeshes.forEach((g, i) => {
+    d.swing[i] *= Math.exp(-13 * dt); d.flash[i] *= Math.exp(-7 * dt);
+    g.rotation.set(-1.25 - d.swing[i] * 0.42, 0, -g.userData.side * 0.28);
+  });
+  // the notes: two columns falling to two rings
+  drumHud.style.opacity = d.on ? 1 : 0;
+  const W = drumHud.width, H = drumHud.height, lineY = H - 34;
+  drumG.clearRect(0, 0, W, H);
+  [W / 2 - 46, W / 2 + 46].forEach((x, lane) => {
+    drumG.strokeStyle = `rgba(240,238,230,${0.55 + d.flash[lane] * 0.45})`; drumG.lineWidth = 2 + d.flash[lane] * 3;
+    drumG.beginPath(); drumG.arc(x, lineY, 15 + d.flash[lane] * 5, 0, Math.PI * 2); drumG.stroke();
+    for (const n of d.notes) {
+      if (n.lane !== lane || n.hit) continue;
+      const y = lineY - ((n.time - d.t) / TUNE.drumLead) * (lineY - 10);
+      if (y < -12 || y > H + 12) continue;
+      drumG.fillStyle = n.missed ? 'rgba(240,238,230,0.2)' : 'rgba(240,238,230,0.9)';
+      drumG.beginPath(); drumG.arc(x, y, 10, 0, Math.PI * 2); drumG.fill();
+    }
+  });
+}
+function applyDrumCamera() {
+  if (drums.k <= 0) return;
+  const e = easeInOut(drums.k);
+  camera.position.lerp(drumCam.position, e); camera.quaternion.slerp(drumCam.quaternion, e);
+  camera.updateMatrixWorld();
+}
+
+// ---------- The nap: pull the lever on the chair, feet up on the desk, lean back... and drift off ----------
+const recline = { on: false, out: false, t: 0, leg: 0, lean: 0, lid: 0, idle: 0, asleep: false, waking: false };
+const legs = new THREE.Group(); legs.visible = false; scene.add(legs);
+const trouser = new THREE.MeshStandardMaterial({ color: '#3b3f4a', roughness: 0.95 });
+const shoeMat = new THREE.MeshStandardMaterial({ color: '#1c1a18', roughness: 0.5 });
+const soleMat = new THREE.MeshStandardMaterial({ color: '#6b5a48', roughness: 0.9 });
+const legParts = [-1, 1].map((side) => {
+  const legGeo = new THREE.BoxGeometry(0.12, 0.11, 1); legGeo.translate(0, 0, 0.5);          // runs along +Z, so lookAt() aims it
+  const leg = new THREE.Mesh(legGeo, trouser); leg.castShadow = true;
+  const shoe = new THREE.Group();
+  const upper = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.22, 0.1), shoeMat); upper.position.y = 0.09; upper.castShadow = true;
+  const sole = new THREE.Mesh(new THREE.BoxGeometry(0.104, 0.26, 0.016), soleMat); sole.position.set(0, 0.08, 0.057);
+  const toe = new THREE.Mesh(new THREE.BoxGeometry(0.086, 0.05, 0.09), shoeMat); toe.position.set(0, 0.225, -0.004);
+  const sock = new THREE.Mesh(new THREE.BoxGeometry(0.105, 0.09, 0.1), new THREE.MeshStandardMaterial({ color: '#8a8f9c', roughness: 1 })); sock.position.set(0, -0.01, -0.06);
+  shoe.add(upper, sole, toe, sock);
+  legs.add(leg, shoe);
+  return { side, leg, shoe };
+});
+const hipV = new THREE.Vector3(), footV = new THREE.Vector3();
+const lidTop = document.getElementById('lidTop'), lidBot = document.getElementById('lidBot');
+function startRecline() {
+  if (held || crumple || recline.on) return;
+  Object.assign(recline, { on: true, out: false, t: 0, idle: 0, asleep: false, waking: false });
+  player.spin = 0; keys.clear();
+  player.yaw = Math.round(player.yaw / (Math.PI * 2)) * Math.PI * 2; lastYaw = player.yaw;     // facing the desk
+  Audio.lever();
+}
+function sitUp() { if (recline.on && !recline.asleep) { recline.out = true; Audio.lever(); } }
+// eyelids: they sink, you fight it twice, then they close
+function lidCurve(s) {
+  const seg = (a, b, from, to) => from + (to - from) * easeInOut(THREE.MathUtils.clamp((s - a) / (b - a), 0, 1));
+  if (s < 1.2) return seg(0, 1.2, 0, 0.62);
+  if (s < 1.7) return seg(1.2, 1.7, 0.62, 0.25);
+  if (s < 3.1) return seg(1.7, 3.1, 0.25, 0.86);
+  if (s < 3.6) return seg(3.1, 3.6, 0.86, 0.5);
+  return seg(3.6, 5.2, 0.5, 1);
+}
+function updateRecline(dt) {
+  const r = recline;
+  if (!r.on && r.leg <= 0 && r.lean <= 0) { legs.visible = false; r.lid = moveToward(r.lid, 0, dt * 3); return; }
+  r.t += dt;
+  const up_ = r.on && !r.out;
+  r.leg = moveToward(r.leg, up_ ? 1 : 0, dt / (up_ ? 0.8 : 0.6));
+  r.lean = moveToward(r.lean, up_ && r.t > 0.7 ? 1 : 0, dt / (up_ ? 1.2 : 0.7));
+  if (r.out && r.leg <= 0 && r.lean <= 0) { r.on = false; r.out = false; player.pitch = -0.12; }
+  // stay like that for more than a moment and your eyes start to close
+  if (r.waking) {
+    r.lid = moveToward(r.lid, 0, dt * 0.45);
+    if (r.lid <= 0) { r.waking = false; r.asleep = false; r.idle = 0; r.out = true; }
+  } else if (!r.asleep) {
+    r.idle = up_ && r.lean >= 1 ? r.idle + dt : 0;
+    const s = r.idle - TUNE.napDelay;
+    r.lid = moveToward(r.lid, s > 0 ? lidCurve(s) : 0, dt * 2.5);
+    if (s >= 5.3) startDream();
+  }
+  // legs: out from under the desk, around its edge, and up onto it
+  const ke = easeInOut(r.leg);
+  legs.visible = r.leg > 0.01 && !replay;
+  for (const p of legParts) {
+    hipV.set(TUNE.seat.x + p.side * 0.09, 0.56, TUNE.seat.z - 0.2 + 0.2 * easeInOut(r.lean));
+    footV.set(TUNE.seat.x + p.side * (0.1 - 0.015 * ke), 0.07 + (ROOM.deskTop - 0.01) * ke, TUNE.seat.z - 0.42 - 0.1 * ke + 0.3 * Math.sin(Math.PI * ke));
+    p.leg.position.copy(hipV); p.leg.lookAt(footV); p.leg.scale.z = hipV.distanceTo(footV);
+    p.shoe.position.copy(footV); p.shoe.quaternion.copy(p.leg.quaternion);
+  }
+}
+function applyReclineCamera() {
+  const r = recline;
+  if (r.leg <= 0 && r.lean <= 0) return;
+  const ke = easeInOut(r.leg), le = easeInOut(r.lean);
+  // watch your feet go up, then tip back and look at the ceiling
+  let pitch = player.pitch + (-0.36 - player.pitch) * ke;
+  pitch += (0.44 - pitch) * le;
+  pitch += Math.sin(performance.now() / 1000 * 1.1) * 0.012 * le;        // breathing
+  camera.position.set(TUNE.seat.x, TUNE.eyeSeated - 0.17 * le, TUNE.seat.z - 0.07 + 0.32 * le);
+  camera.rotation.set(pitch, player.yaw, 0);
+  camera.updateMatrixWorld();
+}
+
+// ---------- The dream ----------
+const dream = createDream();
+let dreaming = null;
+function startDream() {
+  recline.asleep = true; recline.lid = 1;
+  dreaming = { t: 0 };
+  renderPass.scene = dream.scene; renderPass.camera = dream.camera;
+  Audio.dream(TUNE.dreamTime + 1);
+}
+function updateDream(dt) {
+  const d = dreaming;
+  d.t += dt;
+  dream.update(d.t, TUNE.dreamTime);
+  // your eyes open onto the dream, and close on it again at the end
+  const openT = 1.8, closeT = TUNE.dreamTime - 1.6;
+  recline.lid = d.t < openT ? 1 - easeInOut(d.t / openT) : d.t > closeT ? easeInOut(Math.min(1, (d.t - closeT) / 1.6)) : 0;
+  grayPass.uniforms.saturation.value = 1;                                  // the dream is in full color
+  if (d.t >= TUNE.dreamTime) {
+    renderPass.scene = scene; renderPass.camera = camera;
+    dreaming = null;
+    grayPass.uniforms.saturation.value = colorTarget();
+    // you slept through the afternoon
+    const st = brain.state, day = Math.floor(st.clockSec / 86400) * 86400;
+    if (st.clockSec - day < 17 * 3600) st.clockSec = day + 17 * 3600;
+    lastWholeSec = -1;
+    recline.lid = 1; recline.waking = true;
+    tape.length = 0;
+    brain.complete('nap');
+  }
+}
+
+// ---------- The replay cam: when the world notes something, you see the last two seconds again ----------
+// ...from high up, in grainy black and white, with a timestamp. Like footage. (It is.)
+const tape = [];
+let replay = null, replayQueue = null;
+const cctvCam = new THREE.PerspectiveCamera(98, window.innerWidth / window.innerHeight, 0.05, 30);
+cctvCam.position.set(room.detector.position.x, ROOM.ceilingY - 0.09, room.detector.position.z);
+cctvCam.lookAt(-0.3, 0.55, 0.4);
+const cctvHud = document.getElementById('cctv'), cctvTime = document.getElementById('cctvTime');
+// a stand-in for you, only ever seen on the footage
+const figure = new THREE.Group(); figure.visible = false; scene.add(figure);
+{
+  const shirt = new THREE.MeshStandardMaterial({ color: '#d8d6cf', roughness: 0.9 });
+  const skin = new THREE.MeshStandardMaterial({ color: '#b9a48e', roughness: 0.8 });
+  const hair = new THREE.MeshStandardMaterial({ color: '#2a2622', roughness: 1 });
+  const torso = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.5, 0.22), shirt); torso.position.set(0, 0.8, 0.05);
+  const lap = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.14, 0.44), trouser); lap.position.set(0, 0.58, -0.16);
+  const shins = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.5, 0.12), trouser); shins.position.set(0, 0.3, -0.36);
+  const head = new THREE.Group(); head.position.set(0, 1.17, 0.02);
+  const skull = new THREE.Mesh(new THREE.SphereGeometry(0.105, 16, 12), skin); skull.scale.set(0.9, 1.1, 1);
+  const cap = new THREE.Mesh(new THREE.SphereGeometry(0.11, 16, 10, 0, Math.PI * 2, 0, Math.PI * 0.55), hair); cap.position.set(0, 0.015, 0.015); cap.scale.set(0.92, 1.1, 1.02);
+  head.add(skull, cap);
+  const arms = [-1, 1].map((s) => { const a = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.08, 0.42), shirt); a.position.set(s * 0.22, 0.78, -0.14); a.rotation.x = 0.35; return a; });
+  figure.add(torso, lap, shins, head, ...arms);
+  figure.userData.head = head;
+  figure.traverse((o) => { if (o.isMesh) o.castShadow = true; });
+}
+function recordFrame(dt) {
+  const items = [];
+  const add = (m) => { if (m) items.push([m, m.position.x, m.position.y, m.position.z, m.quaternion.x, m.quaternion.y, m.quaternion.z, m.quaternion.w]); };
+  for (const p of paper) add(p.mesh);
+  if (printJob) add(printJob.prop.mesh);
+  if (crumple) add(crumple.mesh);
+  if (shred) add(shred.mesh);
+  if (fold) add(fold.mesh);
+  tape.push({ dt, yaw: player.yaw, pitch: player.pitch, chair: chair.rotation.y, clock: brain.state.clockSec, items });
+  let total = 0;
+  for (let i = tape.length - 1; i >= 0; i--) { total += tape[i].dt; if (total > TUNE.replayTime) { tape.splice(0, i); break; } }
+}
+function startReplay() {
+  replayQueue = null;
+  if (tape.reduce((s, f) => s + f.dt, 0) < 0.6) return;
+  const saved = new Map();
+  const keep = (m) => { if (!saved.has(m)) saved.set(m, { parent: m.parent, visible: m.visible, pos: m.position.clone(), quat: m.quaternion.clone() }); };
+  for (const f of tape) for (const it of f.items) keep(it[0]);
+  for (const p of paper) keep(p.mesh);
+  replay = { frames: tape.slice(), i: 0, t: 0, acc: 0, saved, chairYaw: chair.rotation.y };
+  renderPass.camera = cctvCam;
+  cctvCam.aspect = window.innerWidth / window.innerHeight; cctvCam.updateProjectionMatrix();
+  grayPass.uniforms.cctv.value = 1;
+  cctvHud.style.display = 'block';
+  figure.visible = true; legs.visible = false; sticks.visible = false;
+  if (highlighted) { setGlow(highlighted, false); highlighted = null; }
+}
+function updateReplay(dt) {
+  const r = replay;
+  r.t += dt; r.acc += dt;
+  while (r.i < r.frames.length - 1 && r.acc >= r.frames[r.i].dt) { r.acc -= r.frames[r.i].dt; r.i++; }
+  const f = r.frames[r.i];
+  for (const m of r.saved.keys()) m.visible = false;
+  for (const [m, px, py, pz, qx, qy, qz, qw] of f.items) {
+    if (!m.parent) scene.add(m);
+    m.visible = true; m.position.set(px, py, pz); m.quaternion.set(qx, qy, qz, qw);
+  }
+  chair.rotation.y = f.chair;
+  figure.position.copy(chair.position); figure.rotation.y = f.chair;
+  figure.userData.head.rotation.set(f.pitch, f.yaw - f.chair, 0, 'YXZ');
+  const s = Math.floor(f.clock), hh = Math.floor(s / 3600) % 24, mm = Math.floor(s / 60) % 60, ss = s % 60;
+  cctvTime.textContent = `DAY ${String(brain.state.day).padStart(2, '0')}  ${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}:${String(ss).padStart(2, '0')}`;
+  if (r.i >= r.frames.length - 1 && r.t > TUNE.replayTime + 0.25) endReplay();
+}
+function endReplay() {
+  const r = replay;
+  for (const [m, s] of r.saved) {
+    if (!s.parent) scene.remove(m); else if (m.parent !== s.parent) s.parent.add(m);
+    m.visible = s.visible; m.position.copy(s.pos); m.quaternion.copy(s.quat);
+  }
+  chair.rotation.y = r.chairYaw;
+  figure.visible = false;
+  renderPass.camera = camera;
+  grayPass.uniforms.cctv.value = 0;
+  cctvHud.style.display = 'none';
+  replay = null; tape.length = 0;
+}
+
 // ---------- Each frame: look, chair, camera ----------
 function updatePlayer(dt) {
   const look = 1.9 * dt;   // arrow-key look (fallback)
@@ -544,7 +995,7 @@ function updatePlayer(dt) {
   if (keys.has('ArrowDown')) player.pitch = Math.max(-1.5, player.pitch - look * 0.8);
 
   // A / D push the chair around; it glides to a stop
-  if (!journal.open && desk.k === 0) {
+  if (!journal.open && !busy()) {
     const push = (keys.has('KeyA') ? 1 : 0) - (keys.has('KeyD') ? 1 : 0);
     if (push) player.spin = THREE.MathUtils.clamp(player.spin + push * TUNE.spinAccel * dt, -TUNE.spinMax, TUNE.spinMax);
     else player.spin *= Math.exp(-TUNE.spinFriction * dt);
@@ -554,7 +1005,9 @@ function updatePlayer(dt) {
   trackSpin(dt);
 
   // the chair swivels with you
-  const turn = angleTo(chair.rotation.y, player.yaw) * Math.min(1, dt * 14);
+  // (you can turn your head a fair way before the chair comes with you: that's how you can look at its lever)
+  const lag = angleTo(chair.rotation.y, player.yaw), slack = busy() ? 0 : TUNE.chairSlack;
+  const turn = (Math.abs(lag) > slack ? lag - Math.sign(lag) * slack : 0) * Math.min(1, dt * 14);
   chair.rotation.y += turn;
   player.yawRate = dt > 0 ? Math.abs(turn) / dt : 0;
   Audio.chairRoll(player.yawRate * 0.25);
@@ -566,7 +1019,10 @@ function updatePlayer(dt) {
   const d = player.dizzy, t = performance.now() / 1000;
   camera.rotation.set(player.pitch + Math.sin(t * 1.3) * 0.035 * d, player.yaw + Math.sin(t * 0.83) * 0.07 * d, Math.sin(t * 1.7) * 0.075 * d);
   camera.updateMatrixWorld();
+  applyReclineCamera();
   updateDeskCamera(dt);
+  applyDrumCamera();
+  applyFlightCamera();
 }
 // Counts full turns in one direction, in one go, however you make them (keys or mouse).
 let lastYaw = 0;
@@ -615,7 +1071,7 @@ function ownerOf(o) {
 const lookables = [];
 function updateHover() {
   hovered = null;
-  if (crumple || shred || journal.open || desk.k > 0) return;
+  if (crumple || shred || fold || journal.open || busy()) return;
   raycaster.setFromCamera({ x: 0, y: 0 }, camera);
   if (held) {
     // with a flat sheet in your hand, the shredder is something you can use it on
@@ -637,7 +1093,14 @@ function updateHover() {
     if (raycaster.intersectObject(room.calendar, false)[0]) { hovered = { kind: 'calendar', obj: room.calendar }; return; }
   }
   raycaster.far = TUNE.useReach;
-  if (raycaster.intersectObject(room.computer, true)[0]) hovered = { kind: 'computer', obj: room.computer };
+  if (raycaster.intersectObject(room.computer, true)[0]) { hovered = { kind: 'computer', obj: room.computer }; return; }
+  // small things you can use: the pencil cup, and the lever on your chair
+  camera.getWorldDirection(fwd);
+  for (const [obj, kind, cone] of [[room.pencilCup, 'pencils', 0.085], [room.lever, 'lever', 0.13]]) {
+    obj.getWorldPosition(tmpV).sub(camera.position);
+    const d = tmpV.length();
+    if (d < TUNE.useReach && tmpV.normalize().angleTo(fwd) < cone) { hovered = { kind, obj }; return; }
+  }
   // aim assist: paper near the dot counts
   camera.getWorldDirection(fwd);
   let best = null, bestAngle = Infinity;
@@ -696,6 +1159,11 @@ function step(dt) {
   }
   updateHeld(dt);
   if (crumple) updateCrumple(dt);
+  if (press && !fold) { press.t += dt; if (press.t > TUNE.foldHold && held && held.kind === 'sheet' && held.t >= 1) startFold(); }
+  if (fold) updateFold(dt);
+  if (flight) updateFlight(dt);
+  updateDrums(dt);
+  updateRecline(dt);
   if (shred) updateShred(dt);
   if (printJob) updatePrint(dt);
   pc.update(dt);
@@ -710,6 +1178,12 @@ function step(dt) {
   // color creeps in, very slowly, as cognition rises
   const sat = grayPass.uniforms.saturation;
   sat.value += (colorTarget() - sat.value) * Math.min(1, dt * TUNE.colorEase);
+  recordFrame(dt);
+  if (replayQueue) {
+    replayQueue.age += dt;
+    if (replayQueue.age > 5) replayQueue = null;                       // too late to be an "instant" replay
+    else if (!busy() && !journal.open && !held && !crumple && !fold) { replayQueue.wait -= dt; if (replayQueue.wait <= 0) startReplay(); }
+  }
   saveTimer += dt;
   if (saveTimer > 10) saveNow();
 }
@@ -719,15 +1193,22 @@ window.addEventListener('beforeunload', saveNow);
 function frame(now) {
   const dt = Math.min(0.05, (now - last) / 1000);
   last = now;
-  if (!paused) step(dt);
+  if (!paused) {
+    if (replay) updateReplay(dt);
+    else if (dreaming) updateDream(dt);
+    else step(dt);
+  }
+  lidTop.style.height = lidBot.style.height = (recline.lid * 51).toFixed(2) + '%';
 
-  const fovTarget = calendarFocus > 0 ? TUNE.fovCalendar : TUNE.fov;
+  const fovTarget = calendarFocus > 0 ? TUNE.fovCalendar : flight && !flight.ending ? 84 : TUNE.fov;
   if (Math.abs(camera.fov - fovTarget) > 0.01) { camera.fov += (fovTarget - camera.fov) * Math.min(1, dt * 5); camera.updateProjectionMatrix(); }
   grayPass.uniforms.time.value = (now / 1000) % 100;
   room.detectorLed.emissiveIntensity = (now % 4000) < 140 ? 3 : 0;
   ui.cross.classList.toggle('hot', !!hovered);
-  ui.cross.style.opacity = desk.k > 0 ? 0 : 1;
-  deskHint.style.opacity = desk.at ? 1 : 0;
+  ui.cross.style.opacity = busy() ? 0 : 1;
+  const hintText = desk.at ? 'RIGHT-CLICK · LEAN BACK' : drums.on ? 'LEFT / RIGHT CLICK · DRUM      Q · PUT THE PENCILS DOWN' : recline.on && !recline.asleep && !recline.out && recline.lean >= 1 ? 'CLICK · SIT UP' : '';
+  if (hintText) deskHint.textContent = hintText;
+  deskHint.style.opacity = hintText && !replay ? 1 : 0;
   popup.classList.toggle('high', desk.k > 0);   // at the computer, notes appear above the screen instead of over it
   composer.render();
 
@@ -764,8 +1245,9 @@ window.__op = {
     this.look(yaw, pitch); return { yaw, pitch };
   },
   hovered: () => (hovered ? (hovered.kind === 'prop' ? hovered.prop.name : hovered.kind) : null),
-  held: () => (crumple ? 'crumpling' : held ? held.prop.name : null),
-  click() { click(); return this.held(); },
+  held: () => (crumple ? 'crumpling' : fold ? 'folding' : held ? held.prop.name : null),
+  click() { click(); releasePress(); return this.held(); },
+  press() { mouseHeld = true; click(); }, release() { mouseHeld = false; releasePress(); },
   putDown() { putDown(); },
   // run the game forward without waiting for real time (seconds)
   advance(sec) { for (let t = 0; t < sec; t += 1 / 60) step(1 / 60); },
@@ -778,6 +1260,10 @@ window.__op = {
   fps: () => fps,
   brain, journal, loadedSave, pc, desk,
   sit: () => enterDesk(), leave: () => leaveDesk(),
+  recline, drums, drumHit, leaveDrums, sitUp,
+  flight: () => flight, replay: () => replay, dreaming: () => dreaming, busy,
+  // run whole frames (including replays and the dream), not just the normal game step
+  run(sec) { for (let t = 0; t < sec; t += 1 / 60) { if (replay) updateReplay(1 / 60); else if (dreaming) updateDream(1 / 60); else step(1 / 60); } },
   done: () => brain.state.order.slice(),
   color: () => grayPass.uniforms.saturation.value,
   hold(on) { mouseHeld = on; },

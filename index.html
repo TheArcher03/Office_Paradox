@@ -33,6 +33,16 @@
     #popup .tag { font-size: 10px; letter-spacing: 0.34em; color: var(--dim); margin-bottom: 4px; }
     #popup .name { font-size: 17px; letter-spacing: 0.14em; }
     #deskHint { position: fixed; left: 0; right: 0; bottom: 12px; text-align: center; font-size: 12px; letter-spacing: 0.1em; color: rgba(240,238,230,0.55); opacity: 0; transition: opacity 0.4s; pointer-events: none; z-index: 2; }
+    /* eyelids (the nap) */
+    .lid { position: fixed; left: 0; right: 0; height: 0; background: #000; pointer-events: none; z-index: 2; }
+    #lidTop { top: 0; box-shadow: 0 6px 30px 12px #000; } #lidBot { bottom: 0; box-shadow: 0 -6px 30px 12px #000; }
+    /* pencil drums */
+    #drumHud { position: fixed; left: 50%; bottom: 40px; transform: translateX(-50%); width: 240px; height: 230px; opacity: 0; transition: opacity 0.3s; pointer-events: none; z-index: 2; }
+    /* the replay: security-camera overlay */
+    #cctv { position: fixed; inset: 0; display: none; pointer-events: none; z-index: 2; font-size: 15px; letter-spacing: 0.12em; color: rgba(240,240,236,0.92); text-shadow: 0 0 4px #000; }
+    #cctv .tl { position: absolute; left: 22px; top: 18px; } #cctv .br { position: absolute; right: 22px; bottom: 18px; }
+    #cctv .rec { color: #fff; animation: blink 0.9s steps(2) infinite; }
+    @keyframes blink { 50% { opacity: 0.15; } }
     /* the journal */
     #journal { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; background: rgba(6,6,8,0.55); z-index: 4; padding: 16px; box-sizing: border-box; }
     #journal .page { position: relative; width: min(430px, 92vw); height: min(600px, 86vh); box-sizing: border-box; padding: 34px 34px 30px 52px; color: #2b2a33;
@@ -50,6 +60,9 @@
 <body>
   <div id="app"></div>
   <div id="crosshair"></div>
+  <div id="lidTop" class="lid"></div><div id="lidBot" class="lid"></div>
+  <canvas id="drumHud" width="240" height="230"></canvas>
+  <div id="cctv"><div class="tl"><span class="rec">●</span> REC &nbsp; CAM 03</div><div class="br" id="cctvTime"></div></div>
   <div id="deskHint">RIGHT-CLICK · LEAN BACK</div>
   <div id="popup"><div class="tag">NOTED</div><div class="name"></div></div>
   <div id="journal"><div class="page"><div id="journalBody"></div><div id="journalFoot"></div></div><div class="keys">CLICK · TURN THE PAGE &nbsp;&nbsp; RIGHT-CLICK · BACK &nbsp;&nbsp; J · CLOSE</div></div>
@@ -64,7 +77,7 @@
   <div id="overlay">
     <div class="card">
       <h1>OFFICE PARADOX</h1>
-      <div class="sub">PROTOTYPE · STAGE 3 · THE COMPUTER</div>
+      <div class="sub">PROTOTYPE · STAGE 4 · NOT FLAT</div>
       <div class="go">CLICK TO CLOCK IN</div>
       <table>
         <tr><td>Mouse</td><td>Look around</td></tr>
