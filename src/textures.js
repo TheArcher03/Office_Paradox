@@ -135,7 +135,23 @@ export function calendar() {
     if (day > 31) break;
     g.fillText(String(day++), 15 + k * 33.1, 226 + r * 27);
   }
-  return tex(c);
+  const t = tex(c);
+  for (let d = 1; d <= CALENDAR.crossedAtStart; d++) crossDay(t, d);   // someone was keeping up, then stopped
+  return t;
+}
+// The calendar's month: whoever sat here crossed off the first days, then stopped.
+export const CALENDAR = { days: 31, crossedAtStart: 11 };
+// Cross one day off the calendar (a hand-drawn X in red pencil).
+export function crossDay(t, day) {
+  const g = t.image.getContext('2d');
+  const i = day + 2, r = Math.floor(i / 7), k = i % 7;
+  const x = 12 + k * 33.1, y = 214 + r * 27;
+  const j = () => (Math.sin(day * 12.9898 + j.n++ * 78.233) * 43758.5453 % 1) * 3;
+  j.n = 0;
+  g.strokeStyle = 'rgba(178, 40, 34, 0.85)'; g.lineWidth = 2.2; g.lineCap = 'round';
+  g.beginPath(); g.moveTo(x + 6 + j(), y + 5 + j()); g.lineTo(x + 27 + j(), y + 22 + j()); g.stroke();
+  g.beginPath(); g.moveTo(x + 27 + j(), y + 5 + j()); g.lineTo(x + 6 + j(), y + 22 + j()); g.stroke();
+  t.needsUpdate = true;
 }
 
 export function clockFace() {

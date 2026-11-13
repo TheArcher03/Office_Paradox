@@ -25,30 +25,53 @@
     #debug input { width: 100%; }
     #debug .row { margin-bottom: 10px; }
     #debug .muted { color: var(--dim); }
+    /* achievement pop-up: small and quiet, bottom of the screen */
+    #popup { position: fixed; left: 50%; bottom: 9%; transform: translate(-50%, 14px); opacity: 0; transition: opacity 0.6s, transform 0.6s; pointer-events: none; z-index: 3;
+      background: rgba(12,12,14,0.78); border: 1px solid rgba(233,230,223,0.45); padding: 10px 22px 11px; text-align: center; }
+    #popup.show { opacity: 1; transform: translate(-50%, 0); }
+    #popup .tag { font-size: 10px; letter-spacing: 0.34em; color: var(--dim); margin-bottom: 4px; }
+    #popup .name { font-size: 17px; letter-spacing: 0.14em; }
+    /* the journal */
+    #journal { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; background: rgba(6,6,8,0.55); z-index: 4; padding: 16px; box-sizing: border-box; }
+    #journal .page { position: relative; width: min(430px, 92vw); height: min(600px, 86vh); box-sizing: border-box; padding: 34px 34px 30px 52px; color: #2b2a33;
+      background: repeating-linear-gradient(#f1ecdc 0 31px, #b9c4d6 31px 32px); background-position: 0 22px; box-shadow: 0 18px 50px rgba(0,0,0,0.6), inset 12px 0 18px -10px rgba(0,0,0,0.35);
+      font-family: "Bradley Hand", "Segoe Print", "Comic Sans MS", cursive; font-size: 19px; line-height: 32px; transform: rotate(-0.6deg); overflow: hidden; }
+    #journal .page::before { content: ""; position: absolute; left: 40px; top: 0; bottom: 0; width: 1px; background: #d99; }
+    #journal.back .page { background: #ece6d4; }
+    #journal.back .page::before { display: none; }
+    #journal .entry { margin-bottom: 32px; }
+    #journal .when { font-size: 14px; color: #7a6f66; letter-spacing: 0.04em; }
+    #journalFoot { position: absolute; right: 22px; bottom: 6px; font-size: 14px; color: #8a8378; }
+    #journal .keys { position: fixed; bottom: 14px; left: 0; right: 0; text-align: center; font: 12px "Courier New", monospace; letter-spacing: 0.1em; color: rgba(240,238,230,0.6); }
   </style>
 </head>
 <body>
   <div id="app"></div>
   <div id="crosshair"></div>
+  <div id="popup"><div class="tag">NOTED</div><div class="name"></div></div>
+  <div id="journal"><div class="page"><div id="journalBody"></div><div id="journalFoot"></div></div><div class="keys">CLICK · TURN THE PAGE &nbsp;&nbsp; RIGHT-CLICK · BACK &nbsp;&nbsp; J · CLOSE</div></div>
   <div id="debug">
     <div class="row"><label>Color <span id="satVal"></span></label><input id="sat" type="range" min="0" max="1" step="0.01" /></div>
     <div class="row"><label>Throw strength <span id="powerVal"></span></label><input id="power" type="range" min="0.6" max="1.6" step="0.05" /></div>
     <div class="row"><button id="reset">Reset the room</button></div>
+    <div class="row"><button id="erase">Erase save + start over</button></div>
     <div class="row muted" id="dbgInfo"></div>
     <div class="muted">Esc frees the mouse · ` to close</div>
   </div>
   <div id="overlay">
     <div class="card">
       <h1>OFFICE PARADOX</h1>
-      <div class="sub">PROTOTYPE · STAGE 1 · THE BOX · v4</div>
+      <div class="sub">PROTOTYPE · STAGE 2 · THE BRAIN</div>
       <div class="go">CLICK TO CLOCK IN</div>
       <table>
-        <tr><td>Mouse</td><td>Look around (the chair spins with you)</td></tr>
+        <tr><td>Mouse</td><td>Look around</td></tr>
+        <tr><td>A / D</td><td>Spin the chair</td></tr>
         <tr><td>Click</td><td>Use your hands</td></tr>
         <tr><td>Right-click</td><td>Put it down</td></tr>
+        <tr><td>J</td><td>Journal</td></tr>
         <tr><td>Arrow keys</td><td>Look (if the mouse won't lock)</td></tr>
         <tr><td>Esc</td><td>Pause</td></tr>
-        <tr><td>`</td><td>Debug: color, throw strength, reset</td></tr>
+        <tr><td>`</td><td>Debug: color, throw strength, reset, erase save</td></tr>
       </table>
     </div>
   </div>

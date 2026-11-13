@@ -329,9 +329,12 @@ export function buildRoom(scene, world) {
 
   // ---- Paper shredder on the floor beside the return
   const shredX = 1.07, shredZ = 0.82;
-  staticBox(0.3, 0.5, 0.24, shredX, 0.25, shredZ, std({ color: '#3c3f42', roughness: 0.5 }));
-  staticBox(0.31, 0.08, 0.25, shredX, 0.54, shredZ, std({ color: '#26282a', roughness: 0.4 }));
-  staticBox(0.22, 0.006, 0.012, shredX, 0.583, shredZ, std({ color: '#050505' }), { collide: false });
+  const shredder = new THREE.Group(); scene.add(shredder);
+  shredder.userData.use = 'shredder';
+  staticBox(0.3, 0.5, 0.24, shredX, 0.25, shredZ, std({ color: '#3c3f42', roughness: 0.5 }), { parent: shredder });
+  staticBox(0.31, 0.08, 0.25, shredX, 0.54, shredZ, std({ color: '#26282a', roughness: 0.4 }), { parent: shredder });
+  staticBox(0.22, 0.006, 0.012, shredX, 0.583, shredZ, std({ color: '#050505' }), { collide: false, parent: shredder });
+  shredder.userData.slot = new THREE.Vector3(shredX, 0.586, shredZ);
   colliders.push({ minX: shredX - 0.15, maxX: shredX + 0.15, minZ: shredZ - 0.12, maxZ: shredZ + 0.12 });
 
   // ---- Paperwork: stacked letter trays, the spreadsheet stack, loose sheets
@@ -366,6 +369,7 @@ export function buildRoom(scene, world) {
 
   // ---- Things on the walls
   const cal = wallPlane(0.36, 0.5, T.calendar(), 'left', -0.12, 1.42); cal.name = 'calendar';   // stuck on the wrong month
+  cal.userData.use = 'calendar';
   pin('left', -0.12, 1.66);
   wallPlane(0.5, 0.7, T.poster(), 'left', 0.82, 1.45);                                          // our own motivational poster
   [[0.63, 1.69], [1.01, 1.69]].forEach(([a, y]) => pin('left', a, y));
@@ -516,6 +520,6 @@ export function buildRoom(scene, world) {
 
   return {
     props, colliders, chair, chairBody, clock: { hourHand, minHand, secHand, group: clock }, trashCan, physMat,
-    detectorLed: ledMat, panels, GROUP, impact, spawnSheet, dispensers: [stack], makeCrumple, addBall, removeProp, stackTop: new THREE.Vector3(stackX, DT + 0.07, stackZ),
+    detectorLed: ledMat, panels, GROUP, impact, spawnSheet, dispensers: [stack], makeCrumple, addBall, removeProp, shredder, calendar: cal, stackTop: new THREE.Vector3(stackX, DT + 0.07, stackZ),
   };
 }

@@ -1,5 +1,6 @@
-// Office Paradox — Stage 1 "The Box" (v4, seated pass): you sit in the chair and spin to look around.
-// The only things you can pick up are pieces of paper: take a sheet, crumple it, toss it.
+// Office Paradox — Stage 2 "The Brain": you sit in the chair and spin to look around. The only things you can
+// pick up are pieces of paper. The game quietly notices what you do with them (and with the chair, the shredder
+// and the calendar), writes it in your journal, and lets a little color back in.
 import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
@@ -9,6 +10,9 @@ import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { buildRoom } from './room.js';
 import { GrayFilterShader } from './grayFilter.js';
 import * as Audio from './audio.js';
+import { createBrain } from './brain.js';
+import { createJournal } from './journal.js';
+import { crossDay, CALENDAR } from './textures.js';
 
 // ---------- Tuning knobs (change these to adjust the feel) ----------
 const TUNE = {
@@ -26,8 +30,17 @@ const TUNE = {
   throwLift: 0.8,           // extra upward arc. Tuned so the dot on the rim of the can drops it in from the chair
   throwConverge: 1.5,       // m: the ball's path crosses your line of sight this far out
   maxPaper: 30,             // loose sheets + balls in the room before the oldest one is cleared away
-  fov: 72,
+  fov: 72, fovCalendar: 44,
+  useReach: 2.3,            // how far away you can use the shredder / calendar
+  // Spinning the chair: A / D push off, and it glides.
+  spinAccel: 7, spinMax: 7.5, spinFriction: 0.55,   // rad/s², rad/s, how fast it coasts down
+  spinsNeeded: 10,          // full turns in one direction, in one go
+  dizzyFrom: 3,             // turns before the room starts to swim
+  crossEvery: 0.17,         // seconds between calendar X's while you hold the button
+  shredTime: 1.5,           // seconds for the shredder to eat a sheet
   startColor: 0.06,         // 0 = fully gray, 1 = full color
+  colorFromCognition: 0.34, // how much color a full cognition meter adds (the prototype never fills it)
+  colorEase: 0.12,          // how slowly color creeps in (lower = slower)
 };
 
 // ---------- Renderer, scene, camera ----------
@@ -87,8 +100,30 @@ const grayPass = new ShaderPass(GrayFilterShader);
 grayPass.uniforms.saturation.value = TUNE.startColor;
 composer.addPass(grayPass);
 
+// ---------- The Brain: hidden tasks, cognition, journal, save file ----------
+const popup = document.getElementById('popup');
+let popupTimer = 0;
+const brain = createBrain({
+  onComplete(id, task) {
+    popup.querySelector('.name').textContent = task.title;
+    popup.classList.add('show');
+    clearTimeout(popupTimer);
+    popupTimer = setTimeout(() => popup.classList.remove('show'), 4500);
+    Audio.chime();
+  },
+});
+const loadedSave = brain.load();
+const journal = createJournal(brain, { onTurn: () => Audio.pageTurn() });
+let colorBase = TUNE.startColor;     // the debug slider moves this; cognition adds on top
+const colorTarget = () => Math.min(1, colorBase + brain.cognition() * TUNE.colorFromCognition);
+grayPass.uniforms.saturation.value = colorTarget();
+// the calendar remembers how far you got
+const calTex = room.calendar.material.map;
+if (brain.state.calendarDay == null) brain.state.calendarDay = CALENDAR.crossedAtStart;
+for (let d = CALENDAR.crossedAtStart + 1; d <= brain.state.calendarDay; d++) crossDay(calTex, d);
+
 // ---------- Player: locked in the chair, free to spin all the way around ----------
-const player = { yaw: 0, pitch: -0.18, yawRate: 0 };
+const player = { yaw: 0, pitch: -0.18, yawRate: 0, spin: 0, turned: 0, against: 0, still: 0, dizzy: 0 };
 chair.position.set(TUNE.seat.x, 0, TUNE.seat.z);
 chairBody.position.set(TUNE.seat.x, 0, TUNE.seat.z);
 
@@ -98,7 +133,9 @@ let started = false, paused = true, fallbackLook = false;
 // ---------- Interaction state ----------
 let held = null;            // { prop, kind: 'sheet' | 'ball', t, fromPos, fromQuat }
 let crumple = null;         // a sheet being scrunched: { mesh, set, t, fromPos, fromQuat }
-let hovered = null;         // { kind: 'prop', prop } | { kind: 'dispenser', obj }
+let hovered = null;         // { kind: 'prop', prop } | { kind: 'dispenser' | 'shredder' | 'calendar', obj }
+let shred = null;           // a sheet on its way into the shredder
+let mouseHeld = false, crossTimer = 0, calendarFocus = 0;
 let highlighted = null;     // the object currently glowing
 const paper = props.filter((p) => p.grab);   // every loose sheet + ball, oldest first
 const raycaster = new THREE.Raycaster();
@@ -120,7 +157,8 @@ const ui = {
 ui.sat.value = TUNE.startColor;
 ui.satVal.textContent = Math.round(TUNE.startColor * 100) + '%';
 ui.sat.addEventListener('input', () => {
-  grayPass.uniforms.saturation.value = parseFloat(ui.sat.value);
+  colorBase = parseFloat(ui.sat.value) - brain.cognition() * TUNE.colorFromCognition;
+  grayPass.uniforms.saturation.value = colorTarget();
   ui.satVal.textContent = Math.round(ui.sat.value * 100) + '%';
 });
 const baseThrow = TUNE.throwSpeed;
@@ -131,7 +169,9 @@ ui.power.addEventListener('input', () => {
   TUNE.throwSpeed = baseThrow * k;
   ui.powerVal.textContent = k.toFixed(2) + '×';
 });
-ui.reset.addEventListener('click', () => location.reload());
+ui.reset.addEventListener('click', () => { saveNow(); location.reload(); });
+document.getElementById('erase').addEventListener('click', () => { erased = true; brain.erase(); location.reload(); });
+let erased = false;
 
 // ---------- Input ----------
 const canvas = renderer.domElement;
@@ -162,6 +202,12 @@ window.addEventListener('keydown', (e) => {
   if (paused) return;
   keys.add(e.code);
   if (e.repeat) return;
+  if (e.code === 'KeyJ') { journal.toggle(); return; }
+  if (journal.open) {
+    if (e.code === 'ArrowRight' || e.code === 'KeyD') journal.turn(1);
+    if (e.code === 'ArrowLeft' || e.code === 'KeyA') journal.turn(-1);
+    return;
+  }
   if (e.code === 'KeyF') putDown();
   if (e.code.startsWith('Arrow') || e.code === 'Space') e.preventDefault();
 });
@@ -172,6 +218,7 @@ window.addEventListener('mousemove', (e) => {
   if (paused) return;
   const locked = document.pointerLockElement === canvas;
   if (!locked && !fallbackLook) return;
+  if (journal.open) return;
   // ignore the occasional huge jump some browsers report under pointer lock
   const dx = THREE.MathUtils.clamp(e.movementX || 0, -300, 300), dy = THREE.MathUtils.clamp(e.movementY || 0, -300, 300);
   player.yaw -= dx * TUNE.lookSensitivity;
@@ -181,17 +228,21 @@ window.addEventListener('mousemove', (e) => {
 canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 window.addEventListener('contextmenu', (e) => { if (started) e.preventDefault(); });
 window.addEventListener('mousedown', (e) => {
-  if (paused || e.target !== canvas) return;
-  if (e.button === 0) click();
+  if (paused) return;
+  if (journal.open) { journal.turn(e.button === 2 ? -1 : 1); return; }
+  if (e.target !== canvas) return;
+  if (e.button === 0) { mouseHeld = true; click(); }
   else if (e.button === 2) putDown();
 });
+window.addEventListener('mouseup', (e) => { if (e.button === 0) mouseHeld = false; });
 
 // One button does everything: empty hand → pick up paper. Flat sheet in hand → crumple it. Ball in hand → toss it.
+// (A flat sheet goes into the shredder instead, if that's what you're looking at.)
 function click() {
   if (crumple) return;
   if (!held) { if (hovered) useHovered(); return; }
   if (held.t < 1) return;
-  if (held.kind === 'sheet') startCrumple();
+  if (held.kind === 'sheet') { if (hovered && hovered.kind === 'shredder') startShred(); else startCrumple(); }
   else toss();
 }
 
@@ -212,6 +263,7 @@ function updateHand(kind) {
 function useHovered() {
   if (!hovered) return;
   if (hovered.kind === 'prop') { Audio.impact('paper', 0.6); grab(hovered.prop); }
+  else if (hovered.kind === 'calendar') crossNextDay();
   else if (hovered.kind === 'dispenser') {
     // take a fresh sheet off the top of the stack
     const s = room.stackTop;
@@ -316,6 +368,69 @@ function toss() {
   return release(dir.multiplyScalar(TUNE.throwSpeed), 8);
 }
 
+// ---------- The shredder ----------
+const shredQuat = new THREE.Quaternion().setFromEuler(new THREE.Euler(Math.PI / 2, 0, 0));   // sheet standing on its short edge
+function startShred() {
+  if (shred) return;
+  const sheet = held.prop;
+  const c = room.makeCrumple(sheet.kind);     // at set(0) this is just the flat sheet
+  c.mesh.position.copy(sheet.mesh.position); c.mesh.quaternion.copy(sheet.mesh.quaternion);
+  scene.add(c.mesh);
+  shred = { mesh: c.mesh, kind: sheet.kind, t: 0, fromPos: sheet.mesh.position.clone(), fromQuat: sheet.mesh.quaternion.clone(), buzzing: false };
+  held = null;
+  const i = paper.indexOf(sheet); if (i >= 0) paper.splice(i, 1);
+  room.removeProp(sheet);
+}
+function updateShred(dt) {
+  const s = shred, slot = room.shredder.userData.slot, travel = 0.4;
+  s.t += dt;
+  if (s.t < travel) {
+    // from your hand to just above the slot
+    const e = easeInOut(s.t / travel);
+    tmpV.set(slot.x, slot.y + 0.15, slot.z);
+    s.mesh.position.lerpVectors(s.fromPos, tmpV, e);
+    s.mesh.quaternion.copy(s.fromQuat).slerp(shredQuat, e);
+  } else {
+    if (!s.buzzing) { s.buzzing = true; Audio.shredder(TUNE.shredTime); }
+    const k = Math.min(1, (s.t - travel) / TUNE.shredTime);
+    s.mesh.position.set(slot.x + Math.sin(s.t * 60) * 0.0015, slot.y + 0.15 - k * 0.3, slot.z);   // pulled down, shaking a little
+    s.mesh.quaternion.copy(shredQuat);
+    if (k >= 1) {
+      scene.remove(s.mesh);
+      if (s.kind === 'spreadsheet') brain.complete('shredder');
+      shred = null;
+    }
+  }
+}
+
+// ---------- The calendar ----------
+function crossNextDay() {
+  const st = brain.state;
+  if (st.calendarDay >= CALENDAR.days) return;
+  st.calendarDay++;
+  crossDay(calTex, st.calendarDay);
+  Audio.scratch();
+  crossTimer = TUNE.crossEvery;
+  calendarFocus = 2.5;
+  if (st.calendarDay >= CALENDAR.days) brain.complete('calendar');
+}
+
+// ---------- Paper in the trash can ----------
+function inCan(p) {
+  const c = room.trashCan, b = p.body.position;
+  return Math.hypot(b.x - c.x, b.z - c.z) < c.r && b.y < c.h;
+}
+function checkBaskets() {
+  for (const p of paper) {
+    if (p.scored || p.name !== 'paperBall' || (held && held.prop === p)) continue;
+    if (inCan(p) && p.body.velocity.length() < 0.6) {
+      p.scored = true;
+      brain.bonus('baskets', 1, 5);
+      brain.complete('paperToss');
+    }
+  }
+}
+
 // ---------- Each frame: look, chair, camera ----------
 function updatePlayer(dt) {
   const look = 1.9 * dt;   // arrow-key look (fallback)
@@ -323,6 +438,16 @@ function updatePlayer(dt) {
   if (keys.has('ArrowRight')) player.yaw -= look;
   if (keys.has('ArrowUp')) player.pitch = Math.min(1.45, player.pitch + look * 0.8);
   if (keys.has('ArrowDown')) player.pitch = Math.max(-1.5, player.pitch - look * 0.8);
+
+  // A / D push the chair around; it glides to a stop
+  if (!journal.open) {
+    const push = (keys.has('KeyA') ? 1 : 0) - (keys.has('KeyD') ? 1 : 0);
+    if (push) player.spin = THREE.MathUtils.clamp(player.spin + push * TUNE.spinAccel * dt, -TUNE.spinMax, TUNE.spinMax);
+    else player.spin *= Math.exp(-TUNE.spinFriction * dt);
+    if (Math.abs(player.spin) < 0.02) player.spin = 0;
+    player.yaw += player.spin * dt;
+  }
+  trackSpin(dt);
 
   // the chair swivels with you
   const turn = angleTo(chair.rotation.y, player.yaw) * Math.min(1, dt * 14);
@@ -333,8 +458,29 @@ function updatePlayer(dt) {
 
   const off = 0.07;
   camera.position.set(TUNE.seat.x - Math.sin(player.yaw) * off, TUNE.eyeSeated, TUNE.seat.z - Math.cos(player.yaw) * off);
-  camera.rotation.set(player.pitch, player.yaw, 0);
+  // dizzy: the room keeps swimming for a while after a long spin
+  const d = player.dizzy, t = performance.now() / 1000;
+  camera.rotation.set(player.pitch + Math.sin(t * 1.3) * 0.035 * d, player.yaw + Math.sin(t * 0.83) * 0.07 * d, Math.sin(t * 1.7) * 0.075 * d);
   camera.updateMatrixWorld();
+}
+// Counts full turns in one direction, in one go, however you make them (keys or mouse).
+let lastYaw = 0;
+function trackSpin(dt) {
+  const dy = player.yaw - lastYaw; lastYaw = player.yaw;
+  if (dt <= 0) return;
+  if (Math.abs(dy) / dt < 0.4) {
+    player.still += dt;
+    if (player.still > 1.5) { player.turned = 0; player.against = 0; }
+  } else {
+    player.still = 0;
+    if (player.turned === 0 || Math.sign(dy) === Math.sign(player.turned)) { player.turned += dy; player.against = 0; }
+    else { player.against += Math.abs(dy); if (player.against > 0.7) { player.turned = dy; player.against = 0; } }
+  }
+  const turns = Math.abs(player.turned) / (Math.PI * 2);
+  const want = THREE.MathUtils.clamp((turns - TUNE.dizzyFrom) / (TUNE.spinsNeeded - TUNE.dizzyFrom), 0, 1);
+  if (want > player.dizzy) player.dizzy += (want - player.dizzy) * Math.min(1, dt * 3);
+  else player.dizzy = Math.max(0, player.dizzy - dt * 0.14);      // wears off over several seconds
+  if (turns >= TUNE.spinsNeeded) brain.complete('chairSpin');
 }
 
 function updateHeld(dt) {
@@ -354,6 +500,7 @@ function updateHeld(dt) {
 // ---------- What you're looking at (+ a soft glow on it) ----------
 function ownerOf(o) {
   while (o) {
+    if (o.userData.use) return { kind: o.userData.use, obj: o };
     if (o.userData.prop) { const p = paper.find((q) => q.mesh === o); return p ? { kind: 'prop', prop: p } : null; }
     if (o.userData.dispenser) return { kind: 'dispenser', obj: o };
     o = o.parent;
@@ -363,15 +510,26 @@ function ownerOf(o) {
 const lookables = [];
 function updateHover() {
   hovered = null;
-  if (held || crumple) return;
+  if (crumple || shred || journal.open) return;
+  raycaster.setFromCamera({ x: 0, y: 0 }, camera);
+  if (held) {
+    // with a flat sheet in your hand, the shredder is something you can use it on
+    if (held.kind !== 'sheet' || held.t < 1) return;
+    raycaster.far = TUNE.useReach;
+    if (raycaster.intersectObject(room.shredder, true)[0]) hovered = { kind: 'shredder', obj: room.shredder };
+    return;
+  }
   lookables.length = 0;
   for (const p of paper) lookables.push(p.mesh);
   for (const d of room.dispensers) lookables.push(d);
-  raycaster.setFromCamera({ x: 0, y: 0 }, camera);
   raycaster.far = TUNE.reach;
   const hit = raycaster.intersectObjects(lookables, true)[0];
   if (hit) hovered = ownerOf(hit.object);
   if (hovered) return;
+  if (brain.state.calendarDay < CALENDAR.days) {
+    raycaster.far = TUNE.useReach;
+    if (raycaster.intersectObject(room.calendar, false)[0]) { hovered = { kind: 'calendar', obj: room.calendar }; return; }
+  }
   // aim assist: paper near the dot counts
   camera.getWorldDirection(fwd);
   let best = null, bestAngle = Infinity;
@@ -399,10 +557,10 @@ function updateGlow() {
 }
 
 // ---------- Clock (starts at 9:00, ticks in real seconds for now) ----------
-let clockSec = 9 * 3600, lastWholeSec = -1;
+let lastWholeSec = -1;
 function updateClock(dt) {
-  clockSec += dt;
-  const s = Math.floor(clockSec);
+  brain.state.clockSec += dt;
+  const s = Math.floor(brain.state.clockSec);
   if (s !== lastWholeSec) {
     lastWholeSec = s;
     const sec = s % 60, min = (s / 60) % 60, hr = (s / 3600) % 12;
@@ -430,15 +588,31 @@ function step(dt) {
   }
   updateHeld(dt);
   if (crumple) updateCrumple(dt);
+  if (shred) updateShred(dt);
+  checkBaskets();
   updateHover();
   updateGlow();
   updateClock(dt);
+  // hold the button on the calendar to keep crossing days off
+  crossTimer -= dt;
+  if (mouseHeld && crossTimer <= 0 && hovered && hovered.kind === 'calendar') crossNextDay();
+  calendarFocus = hovered && hovered.kind === 'calendar' && calendarFocus > 0 ? 2.5 : Math.max(0, calendarFocus - dt);
+  // color creeps in, very slowly, as cognition rises
+  const sat = grayPass.uniforms.saturation;
+  sat.value += (colorTarget() - sat.value) * Math.min(1, dt * TUNE.colorEase);
+  saveTimer += dt;
+  if (saveTimer > 10) saveNow();
 }
+let saveTimer = 0;
+function saveNow() { saveTimer = 0; if (!erased) brain.save(); }
+window.addEventListener('beforeunload', saveNow);
 function frame(now) {
   const dt = Math.min(0.05, (now - last) / 1000);
   last = now;
   if (!paused) step(dt);
 
+  const fovTarget = calendarFocus > 0 ? TUNE.fovCalendar : TUNE.fov;
+  if (Math.abs(camera.fov - fovTarget) > 0.01) { camera.fov += (fovTarget - camera.fov) * Math.min(1, dt * 5); camera.updateProjectionMatrix(); }
   grayPass.uniforms.time.value = (now / 1000) % 100;
   room.detectorLed.emissiveIntensity = (now % 4000) < 140 ? 3 : 0;
   ui.cross.classList.toggle('hot', !!hovered);
@@ -447,7 +621,11 @@ function frame(now) {
   fpsAcc += dt; fpsN++;
   if (fpsAcc > 0.5) {
     fps = Math.round(fpsN / fpsAcc); fpsAcc = 0; fpsN = 0;
-    if (ui.debug.style.display === 'block') ui.dbgInfo.textContent = `${fps} fps · ${paper.length} paper${fallbackLook ? ' · arrow-look' : ''}`;
+    if (ui.debug.style.display === 'block') {
+      const sv = grayPass.uniforms.saturation.value;
+      if (document.activeElement !== ui.sat) { ui.sat.value = sv; ui.satVal.textContent = Math.round(sv * 100) + '%'; }
+      ui.dbgInfo.textContent = `${fps} fps · ${paper.length} paper · cognition ${Math.round(brain.cognition() * 100)}% (${brain.state.order.length} found) · ${(Math.abs(player.turned) / (Math.PI * 2)).toFixed(1)} turns${fallbackLook ? ' · arrow-look' : ''}`;
+    }
   }
   requestAnimationFrame(frame);
 }
@@ -462,10 +640,6 @@ window.addEventListener('resize', () => {
 });
 
 // ---------- Test hooks (used by automated checks, harmless in play) ----------
-const inCan = (p) => {
-  const c = room.trashCan, b = p.body.position;
-  return Math.hypot(b.x - c.x, b.z - c.z) < c.r && b.y < c.h;
-};
 window.__op = {
   TUNE, player, props, paper, world, camera, chair,
   start() { started = true; fallbackLook = true; resume(); },
@@ -487,6 +661,11 @@ window.__op = {
   clearPaper() { for (const p of paper.splice(0)) { if (held && p === held.prop) paper.push(p); else room.removeProp(p); } highlighted = null; },
   inCan: () => paper.filter(inCan).length,
   ballPos: (p) => ({ x: p.body.position.x, y: p.body.position.y, z: p.body.position.z }),
-  setColor(v) { grayPass.uniforms.saturation.value = v; ui.sat.value = v; },
+  setColor(v) { colorBase = v - brain.cognition() * TUNE.colorFromCognition; grayPass.uniforms.saturation.value = v; ui.sat.value = v; },
   fps: () => fps,
+  brain, journal, loadedSave,
+  done: () => brain.state.order.slice(),
+  color: () => grayPass.uniforms.saturation.value,
+  hold(on) { mouseHeld = on; },
+  key(code, on) { on ? keys.add(code) : keys.delete(code); },
 };

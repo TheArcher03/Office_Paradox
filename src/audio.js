@@ -75,3 +75,21 @@ export function bump() { burst(0.12, 300, 0.8, 0.5); burst(0.05, 1200, 2, 0.15);
 export function peel() { burst(0.09, 3200, 0.7, 0.07); }
 export function whoosh(strength) { burst(0.22, 900 + strength * 700, 0.6, 0.06 + strength * 0.08); }
 export function chairRoll(speed) { if (speed > 0.15 && Math.random() < 0.25) burst(0.08, 260, 0.9, Math.min(0.08, speed * 0.05)); }
+
+// ---- Stage 2 sounds
+export function scratch() { burst(0.07, 2600 + Math.random() * 500, 1.2, 0.1); }
+export function pageTurn() { burst(0.18, 1500, 0.5, 0.09); }
+// the paper shredder's motor chewing through a sheet
+export function shredder(duration) {
+  if (!ctx || ctx.state !== 'running') return;
+  const t = ctx.currentTime;
+  const g = ctx.createGain();
+  g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(0.07, t + 0.08);
+  g.gain.setValueAtTime(0.07, t + duration - 0.15); g.gain.linearRampToValueAtTime(0.0001, t + duration);
+  const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 1400;
+  [92, 184, 187, 370].forEach((f) => { const o = ctx.createOscillator(); o.type = 'sawtooth'; o.frequency.value = f; o.connect(lp); o.start(t); o.stop(t + duration + 0.05); });
+  lp.connect(g); g.connect(master);
+  for (let k = 0; k < duration / 0.07; k++) setTimeout(() => burst(0.06, 3000 + Math.random() * 1500, 0.7, 0.05), k * 70);
+}
+// a small, warm two-note chime when the world notices something you did
+export function chime() { ring(660, 0.05, 0.9); setTimeout(() => ring(990, 0.04, 1.2), 140); }
