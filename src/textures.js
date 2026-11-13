@@ -287,3 +287,67 @@ export function binderSpine(color, label = true) {
   }
   return tex(c);
 }
+
+// ---- The cat picture (Stage 3). Our own drawing: an orange cat sitting very politely.
+// Draws into any canvas at (x, y, w, h), so the same cat shows on the computer and on the printed page.
+export function drawCat(g, x, y, w, h) {
+  g.save();
+  g.translate(x, y); g.scale(w / 100, h / 100);
+  g.lineJoin = 'round'; g.lineCap = 'round';
+  // wall and floor
+  g.fillStyle = '#bfe0dc'; g.fillRect(0, 0, 100, 100);
+  g.fillStyle = '#e9d9b8'; g.fillRect(0, 76, 100, 24);
+  g.fillStyle = 'rgba(0,0,0,0.12)'; g.beginPath(); g.ellipse(50, 86, 30, 5, 0, 0, Math.PI * 2); g.fill();
+  const fur = '#e58a35', dark = '#b8601c', cream = '#fbe9cf', ink = '#3a2416';
+  g.strokeStyle = ink; g.lineWidth = 1.6;
+  // tail, curling around to the right
+  g.strokeStyle = ink; g.lineWidth = 8.2; g.beginPath(); g.moveTo(66, 82); g.quadraticCurveTo(90, 84, 84, 62); g.stroke();
+  g.strokeStyle = fur; g.lineWidth = 5.6; g.beginPath(); g.moveTo(66, 82); g.quadraticCurveTo(90, 84, 84, 62); g.stroke();
+  g.strokeStyle = cream; g.lineWidth = 5.6; g.beginPath(); g.moveTo(84.6, 65); g.lineTo(84, 62); g.stroke();
+  g.strokeStyle = ink; g.lineWidth = 1.6;
+  // body
+  g.fillStyle = fur; g.beginPath(); g.moveTo(50, 44); g.bezierCurveTo(26, 46, 22, 86, 34, 86); g.lineTo(66, 86); g.bezierCurveTo(78, 86, 74, 46, 50, 44); g.fill(); g.stroke();
+  g.fillStyle = cream; g.beginPath(); g.ellipse(50, 70, 10, 14, 0, 0, Math.PI * 2); g.fill();
+  // front paws
+  g.fillStyle = cream;
+  for (const px of [42, 58]) { g.beginPath(); g.ellipse(px, 85, 6, 4, 0, 0, Math.PI * 2); g.fill(); g.stroke(); }
+  // ears
+  g.fillStyle = fur;
+  g.beginPath(); g.moveTo(31, 30); g.lineTo(30, 10); g.lineTo(45, 20); g.closePath(); g.fill(); g.stroke();
+  g.beginPath(); g.moveTo(69, 30); g.lineTo(70, 10); g.lineTo(55, 20); g.closePath(); g.fill(); g.stroke();
+  g.fillStyle = '#f2b8a8';
+  g.beginPath(); g.moveTo(34, 25); g.lineTo(33.5, 16); g.lineTo(40, 21); g.fill();
+  g.beginPath(); g.moveTo(66, 25); g.lineTo(66.5, 16); g.lineTo(60, 21); g.fill();
+  // head
+  g.fillStyle = fur; g.beginPath(); g.ellipse(50, 36, 22, 18, 0, 0, Math.PI * 2); g.fill(); g.stroke();
+  g.fillStyle = cream; g.beginPath(); g.ellipse(50, 43, 11, 8, 0, 0, Math.PI * 2); g.fill();
+  // stripes
+  g.strokeStyle = dark; g.lineWidth = 2;
+  for (const sx of [44, 50, 56]) { g.beginPath(); g.moveTo(sx, 19.5); g.lineTo(sx, 25); g.stroke(); }
+  g.beginPath(); g.moveTo(29, 36); g.lineTo(34, 37); g.moveTo(71, 36); g.lineTo(66, 37); g.stroke();
+  g.beginPath(); g.moveTo(28, 62); g.lineTo(34, 63); g.moveTo(27.5, 70); g.lineTo(33, 70.5); g.moveTo(72, 62); g.lineTo(66, 63); g.moveTo(72.5, 70); g.lineTo(67, 70.5); g.stroke();
+  // eyes: big, green, a little too interested in you
+  for (const ex of [40.5, 59.5]) {
+    g.fillStyle = '#9fd36a'; g.beginPath(); g.ellipse(ex, 34, 5, 5.6, 0, 0, Math.PI * 2); g.fill();
+    g.strokeStyle = ink; g.lineWidth = 1.3; g.stroke();
+    g.fillStyle = ink; g.beginPath(); g.ellipse(ex, 34.3, 2.1, 4.4, 0, 0, Math.PI * 2); g.fill();
+    g.fillStyle = '#fff'; g.beginPath(); g.arc(ex + 1.6, 32, 1.2, 0, Math.PI * 2); g.fill();
+  }
+  // nose, mouth, whiskers
+  g.fillStyle = '#e07a7a'; g.beginPath(); g.moveTo(47.6, 40.5); g.lineTo(52.4, 40.5); g.lineTo(50, 43.2); g.closePath(); g.fill();
+  g.strokeStyle = ink; g.lineWidth = 1.2;
+  g.beginPath(); g.moveTo(50, 43.2); g.lineTo(50, 45); g.moveTo(50, 45); g.quadraticCurveTo(47, 48, 44.5, 45.6); g.moveTo(50, 45); g.quadraticCurveTo(53, 48, 55.5, 45.6); g.stroke();
+  g.lineWidth = 0.8;
+  for (const [sx, d] of [[41, -1], [59, 1]]) for (const dy of [-2, 1, 4]) { g.beginPath(); g.moveTo(sx, 44); g.lineTo(sx + d * 15, 43 + dy); g.stroke(); }
+  g.restore();
+}
+// the printed page: the cat, with a white margin like a real printout
+export function catPrint() {
+  const [c, g] = canvas(256, 334);
+  g.fillStyle = '#f7f5ee'; g.fillRect(0, 0, 256, 334);
+  drawCat(g, 28, 44, 200, 200);
+  g.strokeStyle = '#444'; g.lineWidth = 1; g.strokeRect(28, 44, 200, 200);
+  g.fillStyle = '#666'; g.font = '11px "Courier New", monospace'; g.textAlign = 'left';
+  g.fillText('cat.bmp', 28, 268); g.textAlign = 'right'; g.fillText('page 1 of 1', 228, 268);
+  return tex(c);
+}

@@ -29,8 +29,10 @@
     #popup { position: fixed; left: 50%; bottom: 9%; transform: translate(-50%, 14px); opacity: 0; transition: opacity 0.6s, transform 0.6s; pointer-events: none; z-index: 3;
       background: rgba(12,12,14,0.78); border: 1px solid rgba(233,230,223,0.45); padding: 10px 22px 11px; text-align: center; }
     #popup.show { opacity: 1; transform: translate(-50%, 0); }
+    #popup.high { bottom: auto; top: 3%; }
     #popup .tag { font-size: 10px; letter-spacing: 0.34em; color: var(--dim); margin-bottom: 4px; }
     #popup .name { font-size: 17px; letter-spacing: 0.14em; }
+    #deskHint { position: fixed; left: 0; right: 0; bottom: 12px; text-align: center; font-size: 12px; letter-spacing: 0.1em; color: rgba(240,238,230,0.55); opacity: 0; transition: opacity 0.4s; pointer-events: none; z-index: 2; }
     /* the journal */
     #journal { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; background: rgba(6,6,8,0.55); z-index: 4; padding: 16px; box-sizing: border-box; }
     #journal .page { position: relative; width: min(430px, 92vw); height: min(600px, 86vh); box-sizing: border-box; padding: 34px 34px 30px 52px; color: #2b2a33;
@@ -48,6 +50,7 @@
 <body>
   <div id="app"></div>
   <div id="crosshair"></div>
+  <div id="deskHint">RIGHT-CLICK · LEAN BACK</div>
   <div id="popup"><div class="tag">NOTED</div><div class="name"></div></div>
   <div id="journal"><div class="page"><div id="journalBody"></div><div id="journalFoot"></div></div><div class="keys">CLICK · TURN THE PAGE &nbsp;&nbsp; RIGHT-CLICK · BACK &nbsp;&nbsp; J · CLOSE</div></div>
   <div id="debug">
@@ -61,7 +64,7 @@
   <div id="overlay">
     <div class="card">
       <h1>OFFICE PARADOX</h1>
-      <div class="sub">PROTOTYPE · STAGE 2 · THE BRAIN</div>
+      <div class="sub">PROTOTYPE · STAGE 3 · THE COMPUTER</div>
       <div class="go">CLICK TO CLOCK IN</div>
       <table>
         <tr><td>Mouse</td><td>Look around</td></tr>

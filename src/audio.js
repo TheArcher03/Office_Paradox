@@ -93,3 +93,32 @@ export function shredder(duration) {
 }
 // a small, warm two-note chime when the world notices something you did
 export function chime() { ring(660, 0.05, 0.9); setTimeout(() => ring(990, 0.04, 1.2), 140); }
+
+// ---- Stage 3 sounds: the computer and the printer
+function tone(freq, dur, gain = 0.04, type = 'square', slideTo = null) {
+  if (!ctx || ctx.state !== 'running') return;
+  const t = ctx.currentTime;
+  const o = ctx.createOscillator(); o.type = type; o.frequency.setValueAtTime(freq, t);
+  if (slideTo) o.frequency.exponentialRampToValueAtTime(slideTo, t + dur);
+  const g = ctx.createGain(); g.gain.setValueAtTime(gain, t); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  o.connect(g); g.connect(master); o.start(t); o.stop(t + dur + 0.02);
+}
+export function computer(name) {
+  switch (name) {
+    case 'click': burst(0.02, 2400, 3, 0.12); break;
+    case 'boot': tone(880, 0.22, 0.035); burst(1.2, 500, 0.6, 0.03); break;            // POST beep + the drive spinning up
+    case 'chime': tone(523, 0.5, 0.03, 'triangle'); setTimeout(() => tone(784, 0.7, 0.03, 'triangle'), 160); break;
+    case 'error': tone(196, 0.18, 0.04); break;
+    case 'start': tone(440, 0.08, 0.03); setTimeout(() => tone(660, 0.12, 0.03), 80); break;
+    case 'jump': tone(420, 0.14, 0.025, 'square', 760); break;
+    case 'crash': tone(300, 0.35, 0.04, 'sawtooth', 60); burst(0.2, 400, 0.7, 0.15); break;
+    case 'warp': tone(300, 0.7, 0.025, 'triangle', 1400); break;
+    default: break;
+  }
+}
+// the printer hauling a page through
+export function printer(duration) {
+  if (!ctx || ctx.state !== 'running') return;
+  for (let k = 0; k < duration / 0.11; k++) setTimeout(() => { burst(0.09, 900 + (k % 4) * 260, 2.5, 0.07); if (k % 5 === 0) tone(1500 + (k % 3) * 200, 0.06, 0.008); }, k * 110);
+}
+export function pin() { burst(0.03, 1800, 2, 0.2); burst(0.05, 500, 1.2, 0.12); }

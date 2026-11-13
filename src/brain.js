@@ -20,12 +20,24 @@ export const TASKS = {
     points: 12, title: 'Caught Up',
     entry: 'The calendar was weeks behind. I crossed off every day I could not remember having. Now it agrees with me that today is today.',
   },
+  ufoGame: {
+    points: 10, title: 'Out of Office',
+    entry: 'The network is down. There is a little game hiding behind the error page: a small traveler in a saucer, hopping rocks on somebody else\'s planet. I rooted for it more than I expected to.',
+  },
+  printCat: {
+    points: 10, title: 'Hard Copy',
+    entry: 'Found a picture of a cat on the computer and printed it. It used a great deal of ink. I do not remember ever meeting a cat. I knew what it was anyway.',
+  },
+  hangCat: {
+    points: 16, title: 'Office Pet',
+    entry: 'Pinned the cat to the corkboard, next to the memos. It watches the desk now. For the first time the cubicle looks like it belongs to someone.',
+  },
 };
 // Rough total for all 10 prototype tasks plus small bonuses. Cognition = points / this.
 export const PROTOTYPE_POINTS = 120;
 const SAVE_KEY = 'office-paradox-save-v1';
 
-const fresh = () => ({ v: 1, done: {}, order: [], points: 0, clockSec: 9 * 3600, day: 1, calendarDay: null, baskets: 0 });
+const fresh = () => ({ v: 1, done: {}, order: [], points: 0, clockSec: 9 * 3600, day: 1, calendarDay: null, baskets: 0, pcOn: false, ufoBest: 0, pinned: [] });
 
 export function createBrain({ onComplete = () => {} } = {}) {
   let state = fresh();

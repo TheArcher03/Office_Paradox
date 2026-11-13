@@ -95,7 +95,7 @@ export function buildRoom(scene, world) {
     const i = props.indexOf(p); if (i >= 0) props.splice(i, 1);
   }
   // a single sheet of paper: light, floaty, and it can lie flat or be pinned to a wall
-  const sheetTex = { spreadsheet: T.spreadsheet(), memo: T.paper(true), blank: T.paper(false) };
+  const sheetTex = { spreadsheet: T.spreadsheet(), memo: T.paper(true), blank: T.paper(false), cat: T.catPrint() };
   const sheetEdge = std({ color: '#efece4', roughness: 0.95 });
   function makeSheet(kind, x, y, z, opts = {}) {
     const face = std({ map: sheetTex[kind], roughness: 0.95 });
@@ -270,15 +270,19 @@ export function buildRoom(scene, world) {
   const beige = std({ color: '#d2cab3', roughness: 0.6 });
   const monX = -0.25, monFront = -0.8;
   const monY = DT + 0.04 + 0.2;
-  staticBox(0.26, 0.04, 0.24, monX, DT + 0.02, monFront - 0.16, beige);                     // swivel base
-  staticBox(0.44, 0.38, 0.05, monX, monY, monFront - 0.025, beige);                          // bezel
-  staticBox(0.4, 0.34, 0.2, monX, monY, monFront - 0.15, beige);                             // body
+  const computer = new THREE.Group(); scene.add(computer);
+  computer.userData.use = 'computer';
+  const monBeige = beige.clone();   // its own material, so only the monitor glows when you look at it
+  staticBox(0.26, 0.04, 0.24, monX, DT + 0.02, monFront - 0.16, monBeige, { parent: computer });                     // swivel base
+  staticBox(0.44, 0.38, 0.05, monX, monY, monFront - 0.025, monBeige, { parent: computer });                          // bezel
+  staticBox(0.4, 0.34, 0.2, monX, monY, monFront - 0.15, monBeige, { parent: computer });                             // body
   const crtBack = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.24, 0.22, 4, 1), beige);  // tapered tube housing
   crtBack.rotation.x = -Math.PI / 2; crtBack.rotation.y = Math.PI / 4;
   crtBack.position.set(monX, monY - 0.01, monFront - 0.36); crtBack.castShadow = true; scene.add(crtBack);
   staticCollider(0.14, 0.12, 0.11, monX, monY - 0.01, monFront - 0.36);
-  const screen = new THREE.Mesh(new THREE.PlaneGeometry(0.34, 0.265), std({ map: T.crtScreen(), roughness: 0.15, metalness: 0.1 }));
-  screen.position.set(monX, monY + 0.01, monFront + 0.001); scene.add(screen);
+  // the screen lights itself (the picture comes from src/computer.js)
+  const screen = new THREE.Mesh(new THREE.PlaneGeometry(0.34, 0.265), new THREE.MeshBasicMaterial({ color: '#ffffff', toneMapped: false }));
+  screen.position.set(monX, monY + 0.01, monFront + 0.001); computer.add(screen);
   screen.name = 'crtScreen';
   const powerLed = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.006, 0.004), std({ color: '#1a3', emissive: '#1a3', emissiveIntensity: 0.6 }));
   powerLed.position.set(monX + 0.17, monY - 0.165, monFront + 0.002); scene.add(powerLed);
@@ -323,8 +327,8 @@ export function buildRoom(scene, world) {
   // ---- Printer on the far end of the return
   const prX = 1.0, prZ = 0.2;
   staticBox(0.42, 0.2, 0.46, prX, DT + 0.1, prZ, beige);
-  staticBox(0.12, 0.02, 0.3, prX - 0.27, DT + 0.03, prZ, beige, { collide: false }); // output tray (faces you)
-  staticBox(0.2, 0.004, 0.27, prX - 0.27, DT + 0.042, prZ, std({ map: T.paper(false) }), { collide: false });
+  staticBox(0.26, 0.02, 0.3, prX - 0.34, DT + 0.03, prZ, beige); // output tray (faces you): printed pages slide out onto it
+  const printerOut = { from: new THREE.Vector3(prX - 0.12, DT + 0.046, prZ), to: new THREE.Vector3(prX - 0.345, DT + 0.046, prZ) };
   staticBox(0.05, 0.025, 0.09, prX - 0.12, DT + 0.21, prZ + 0.14, std({ color: '#4a4f52' }), { collide: false }); // buttons
 
   // ---- Paper shredder on the floor beside the return
@@ -374,7 +378,26 @@ export function buildRoom(scene, world) {
   wallPlane(0.5, 0.7, T.poster(), 'left', 0.82, 1.45);                                          // our own motivational poster
   [[0.63, 1.69], [1.01, 1.69]].forEach(([a, y]) => pin('left', a, y));
   staticBox(0.02, 0.66, 0.8, H - 0.01, 1.42, -0.0, std({ color: '#6e5232' }), { collide: false, shadow: false });
-  wallPlane(0.8, 0.53, T.corkboard(), 'right', 0.0, 1.42, { inset: 0.0215 });                  // corkboard over the return
+  const corkboard = wallPlane(0.8, 0.53, T.corkboard(), 'right', 0.0, 1.42, { inset: 0.0215 }); // corkboard over the return
+  corkboard.userData.use = 'corkboard';
+  // Pin a sheet to the corkboard at (z, y) on the wall. Returns the pinned group.
+  const pinned = [];
+  function pinSheet(kind, z, y, tilt) {
+    z = THREE.MathUtils.clamp(z, -0.4 + 0.115, 0.4 - 0.115); y = THREE.MathUtils.clamp(y, 1.42 - 0.265 + 0.145, 1.42 + 0.265 - 0.14);
+    const face = std({ map: sheetTex[kind] || sheetTex.blank, roughness: 0.95 });
+    const grp = new THREE.Group();
+    const m = new THREE.Mesh(new THREE.BoxGeometry(0.215, 0.002, 0.28), [sheetEdge, sheetEdge, face, face, sheetEdge, sheetEdge]);
+    m.castShadow = true; m.receiveShadow = true;
+    const tack = new THREE.Mesh(new THREE.SphereGeometry(0.009, 10, 8), pinMat); tack.position.set(0, 0.006, -0.12);
+    grp.add(m, tack);
+    grp.quaternion.copy(wallQuat('right', tilt));
+    grp.position.set(H - 0.0215 - 0.004 - pinned.length * 0.0012, y, z);
+    scene.add(grp);
+    const rec = { kind, z, y, tilt, group: grp };
+    pinned.push(rec);
+    return rec;
+  }
+  function unpinOldest() { const r = pinned.shift(); if (r) scene.remove(r.group); }
   // pinned memos: pull them off the wall (the pin stays behind)
   [['back', 0.28, 1.2, 0.04], ['back', 1.08, 1.32, -0.03], ['front', 0.15, 1.4, 0.02]].forEach(([wall, a, y, tilt]) => {
     const pos = { back: [a, y, -H + 0.006], front: [a, y, H - 0.006] }[wall];
@@ -520,6 +543,7 @@ export function buildRoom(scene, world) {
 
   return {
     props, colliders, chair, chairBody, clock: { hourHand, minHand, secHand, group: clock }, trashCan, physMat,
-    detectorLed: ledMat, panels, GROUP, impact, spawnSheet, dispensers: [stack], makeCrumple, addBall, removeProp, shredder, calendar: cal, stackTop: new THREE.Vector3(stackX, DT + 0.07, stackZ),
+    detectorLed: ledMat, panels, GROUP, impact, spawnSheet, dispensers: [stack], makeCrumple, addBall, removeProp, shredder, calendar: cal, computer, screen, printerOut, corkboard, pinSheet, pinned, unpinOldest, makeSheet,
+    monitorView: { x: monX, y: monY + 0.01, z: monFront + 0.001, h: 0.265 }, stackTop: new THREE.Vector3(stackX, DT + 0.07, stackZ),
   };
 }

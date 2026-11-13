@@ -12,6 +12,7 @@ import { GrayFilterShader } from './grayFilter.js';
 import * as Audio from './audio.js';
 import { createBrain } from './brain.js';
 import { createJournal } from './journal.js';
+import { createComputer } from './computer.js';
 import { crossDay, CALENDAR } from './textures.js';
 
 // ---------- Tuning knobs (change these to adjust the feel) ----------
@@ -38,6 +39,11 @@ const TUNE = {
   dizzyFrom: 3,             // turns before the room starts to swim
   crossEvery: 0.17,         // seconds between calendar X's while you hold the button
   shredTime: 1.5,           // seconds for the shredder to eat a sheet
+  deskTime: 0.65,           // seconds to lean in to / back from the monitor
+  screenFill: 0.84,         // how much of the view the screen fills when you lean in
+  cursorSpeed: 1.0,         // mouse pointer speed on the computer
+  printTime: 1.6,           // seconds for the printer to push a page out
+  maxPinned: 8,             // sheets on the corkboard before the oldest comes down
   startColor: 0.06,         // 0 = fully gray, 1 = full color
   colorFromCognition: 0.34, // how much color a full cognition meter adds (the prototype never fills it)
   colorEase: 0.12,          // how slowly color creeps in (lower = slower)
@@ -117,6 +123,19 @@ const journal = createJournal(brain, { onTurn: () => Audio.pageTurn() });
 let colorBase = TUNE.startColor;     // the debug slider moves this; cognition adds on top
 const colorTarget = () => Math.min(1, colorBase + brain.cognition() * TUNE.colorFromCognition);
 grayPass.uniforms.saturation.value = colorTarget();
+// the computer on the desk: its picture is drawn in src/computer.js and shown on the monitor
+const pc = createComputer({
+  brain,
+  sfx: (name) => Audio.computer(name),
+  onPrint: () => startPrint(),
+  onScore: () => brain.complete('ufoGame'),
+});
+room.screen.material.map = pc.texture; room.screen.material.needsUpdate = true;
+const desk = { at: false, entering: false, k: 0, fromPos: new THREE.Vector3(), fromQuat: new THREE.Quaternion() };
+const deskHint = document.getElementById('deskHint');
+let printJob = null;
+// whatever you pinned to the corkboard is still there
+for (const r of brain.state.pinned) room.pinSheet(r.kind, r.z, r.y, r.tilt);
 // the calendar remembers how far you got
 const calTex = room.calendar.material.map;
 if (brain.state.calendarDay == null) brain.state.calendarDay = CALENDAR.crossedAtStart;
@@ -202,6 +221,12 @@ window.addEventListener('keydown', (e) => {
   if (paused) return;
   keys.add(e.code);
   if (e.repeat) return;
+  if (desk.at) {
+    // at the computer the keyboard belongs to the computer
+    if (e.code === 'Space' || e.code.startsWith('Arrow')) e.preventDefault();
+    if (!e.repeat) pc.key(e.code, true);
+    return;
+  }
   if (e.code === 'KeyJ') { journal.toggle(); return; }
   if (journal.open) {
     if (e.code === 'ArrowRight' || e.code === 'KeyD') journal.turn(1);
@@ -211,7 +236,7 @@ window.addEventListener('keydown', (e) => {
   if (e.code === 'KeyF') putDown();
   if (e.code.startsWith('Arrow') || e.code === 'Space') e.preventDefault();
 });
-window.addEventListener('keyup', (e) => keys.delete(e.code));
+window.addEventListener('keyup', (e) => { keys.delete(e.code); pc.key(e.code, false); });
 window.addEventListener('blur', () => keys.clear());
 
 window.addEventListener('mousemove', (e) => {
@@ -219,6 +244,7 @@ window.addEventListener('mousemove', (e) => {
   const locked = document.pointerLockElement === canvas;
   if (!locked && !fallbackLook) return;
   if (journal.open) return;
+  if (desk.at) { pc.move((e.movementX || 0) * TUNE.cursorSpeed, (e.movementY || 0) * TUNE.cursorSpeed); return; }
   // ignore the occasional huge jump some browsers report under pointer lock
   const dx = THREE.MathUtils.clamp(e.movementX || 0, -300, 300), dy = THREE.MathUtils.clamp(e.movementY || 0, -300, 300);
   player.yaw -= dx * TUNE.lookSensitivity;
@@ -231,6 +257,7 @@ window.addEventListener('mousedown', (e) => {
   if (paused) return;
   if (journal.open) { journal.turn(e.button === 2 ? -1 : 1); return; }
   if (e.target !== canvas) return;
+  if (desk.at) { if (e.button === 0) pc.click(); else if (e.button === 2) leaveDesk(); return; }
   if (e.button === 0) { mouseHeld = true; click(); }
   else if (e.button === 2) putDown();
 });
@@ -242,7 +269,11 @@ function click() {
   if (crumple) return;
   if (!held) { if (hovered) useHovered(); return; }
   if (held.t < 1) return;
-  if (held.kind === 'sheet') { if (hovered && hovered.kind === 'shredder') startShred(); else startCrumple(); }
+  if (held.kind === 'sheet') {
+    if (hovered && hovered.kind === 'shredder') startShred();
+    else if (hovered && hovered.kind === 'corkboard') pinHeld();
+    else startCrumple();
+  }
   else toss();
 }
 
@@ -264,6 +295,7 @@ function useHovered() {
   if (!hovered) return;
   if (hovered.kind === 'prop') { Audio.impact('paper', 0.6); grab(hovered.prop); }
   else if (hovered.kind === 'calendar') crossNextDay();
+  else if (hovered.kind === 'computer') enterDesk();
   else if (hovered.kind === 'dispenser') {
     // take a fresh sheet off the top of the stack
     const s = room.stackTop;
@@ -368,6 +400,78 @@ function toss() {
   return release(dir.multiplyScalar(TUNE.throwSpeed), 8);
 }
 
+// ---------- The computer: lean in to the monitor, lean back out ----------
+function enterDesk() {
+  if (held || crumple || desk.at) return;
+  desk.at = true; desk.entering = true;
+  desk.fromPos.copy(camera.position); desk.fromQuat.copy(camera.quaternion);
+  // the chair ends up facing the desk
+  player.spin = 0;
+  player.yaw = Math.round(player.yaw / (Math.PI * 2)) * Math.PI * 2; lastYaw = player.yaw;
+  player.pitch = -0.12;
+  keys.clear();
+  pc.wake();
+}
+function leaveDesk() { desk.at = false; desk.entering = false; pc.key('KeyS', false); }
+const NO_TURN = new THREE.Quaternion();
+const deskPos = new THREE.Vector3();
+function updateDeskCamera(dt) {
+  desk.k = THREE.MathUtils.clamp(desk.k + (desk.at ? 1 : -1) * dt / TUNE.deskTime, 0, 1);
+  if (desk.k <= 0) return;
+  const v = room.monitorView, tan = Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
+  // far enough back that the whole screen fits, in a wide window or a tall one
+  const dist = Math.max(v.h / TUNE.screenFill / 2 / tan, (v.h * 1.283) / 0.94 / 2 / (tan * camera.aspect));
+  deskPos.set(v.x, v.y, v.z + dist);
+  const e = easeInOut(desk.k);
+  if (desk.entering) { camera.position.lerpVectors(desk.fromPos, deskPos, e); camera.quaternion.copy(desk.fromQuat).slerp(NO_TURN, e); }
+  else { camera.position.lerp(deskPos, e); camera.quaternion.slerp(NO_TURN, e); }
+  camera.updateMatrixWorld();
+}
+
+// ---------- The printer ----------
+function startPrint() {
+  if (printJob) return;
+  const o = room.printerOut;
+  const sheet = room.makeSheet('cat', o.from.x, o.from.y, o.from.z);
+  sheet.body.type = CANNON.Body.KINEMATIC; sheet.body.collisionFilterMask = 0;
+  printJob = { prop: sheet, t: 0 };
+  Audio.printer(TUNE.printTime);
+}
+function updatePrint(dt) {
+  const j = printJob, o = room.printerOut, b = j.prop.body;
+  j.t = Math.min(1, j.t + dt / TUNE.printTime);
+  j.prop.mesh.position.lerpVectors(o.from, o.to, j.t);
+  b.position.copy(j.prop.mesh.position); b.velocity.set(0, 0, 0);
+  if (j.t >= 1) {
+    // the page is out: now it's a loose sheet you can pick up
+    b.type = CANNON.Body.DYNAMIC; b.mass = j.prop.mass; b.updateMassProperties();
+    b.collisionFilterMask = GROUP.WORLD | GROUP.PROP;
+    b.previousPosition.copy(b.position); b.interpolatedPosition.copy(b.position);
+    b.wakeUp();
+    trackPaper(j.prop);
+    printJob = null;
+    brain.complete('printCat');
+  }
+}
+
+// ---------- The corkboard ----------
+function pinHeld() {
+  raycaster.setFromCamera({ x: 0, y: 0 }, camera);
+  raycaster.far = TUNE.useReach;
+  const hit = raycaster.intersectObject(room.corkboard, false)[0];
+  if (!hit) return;
+  const sheet = held.prop, kind = sheet.kind;
+  held = null;
+  const i = paper.indexOf(sheet); if (i >= 0) paper.splice(i, 1);
+  room.removeProp(sheet);
+  if (room.pinned.length >= TUNE.maxPinned) { room.unpinOldest(); brain.state.pinned.shift(); }
+  const rec = room.pinSheet(kind, hit.point.z, hit.point.y, (Math.random() - 0.5) * 0.16);
+  brain.state.pinned.push({ kind, z: rec.z, y: rec.y, tilt: rec.tilt });
+  Audio.pin();
+  if (kind === 'cat') brain.complete('hangCat');
+  brain.save();
+}
+
 // ---------- The shredder ----------
 const shredQuat = new THREE.Quaternion().setFromEuler(new THREE.Euler(Math.PI / 2, 0, 0));   // sheet standing on its short edge
 function startShred() {
@@ -440,7 +544,7 @@ function updatePlayer(dt) {
   if (keys.has('ArrowDown')) player.pitch = Math.max(-1.5, player.pitch - look * 0.8);
 
   // A / D push the chair around; it glides to a stop
-  if (!journal.open) {
+  if (!journal.open && desk.k === 0) {
     const push = (keys.has('KeyA') ? 1 : 0) - (keys.has('KeyD') ? 1 : 0);
     if (push) player.spin = THREE.MathUtils.clamp(player.spin + push * TUNE.spinAccel * dt, -TUNE.spinMax, TUNE.spinMax);
     else player.spin *= Math.exp(-TUNE.spinFriction * dt);
@@ -462,6 +566,7 @@ function updatePlayer(dt) {
   const d = player.dizzy, t = performance.now() / 1000;
   camera.rotation.set(player.pitch + Math.sin(t * 1.3) * 0.035 * d, player.yaw + Math.sin(t * 0.83) * 0.07 * d, Math.sin(t * 1.7) * 0.075 * d);
   camera.updateMatrixWorld();
+  updateDeskCamera(dt);
 }
 // Counts full turns in one direction, in one go, however you make them (keys or mouse).
 let lastYaw = 0;
@@ -510,13 +615,14 @@ function ownerOf(o) {
 const lookables = [];
 function updateHover() {
   hovered = null;
-  if (crumple || shred || journal.open) return;
+  if (crumple || shred || journal.open || desk.k > 0) return;
   raycaster.setFromCamera({ x: 0, y: 0 }, camera);
   if (held) {
     // with a flat sheet in your hand, the shredder is something you can use it on
     if (held.kind !== 'sheet' || held.t < 1) return;
     raycaster.far = TUNE.useReach;
     if (raycaster.intersectObject(room.shredder, true)[0]) hovered = { kind: 'shredder', obj: room.shredder };
+    else if (raycaster.intersectObject(room.corkboard, false)[0]) hovered = { kind: 'corkboard', obj: room.corkboard };
     return;
   }
   lookables.length = 0;
@@ -530,6 +636,8 @@ function updateHover() {
     raycaster.far = TUNE.useReach;
     if (raycaster.intersectObject(room.calendar, false)[0]) { hovered = { kind: 'calendar', obj: room.calendar }; return; }
   }
+  raycaster.far = TUNE.useReach;
+  if (raycaster.intersectObject(room.computer, true)[0]) hovered = { kind: 'computer', obj: room.computer };
   // aim assist: paper near the dot counts
   camera.getWorldDirection(fwd);
   let best = null, bestAngle = Infinity;
@@ -589,6 +697,8 @@ function step(dt) {
   updateHeld(dt);
   if (crumple) updateCrumple(dt);
   if (shred) updateShred(dt);
+  if (printJob) updatePrint(dt);
+  pc.update(dt);
   checkBaskets();
   updateHover();
   updateGlow();
@@ -616,6 +726,9 @@ function frame(now) {
   grayPass.uniforms.time.value = (now / 1000) % 100;
   room.detectorLed.emissiveIntensity = (now % 4000) < 140 ? 3 : 0;
   ui.cross.classList.toggle('hot', !!hovered);
+  ui.cross.style.opacity = desk.k > 0 ? 0 : 1;
+  deskHint.style.opacity = desk.at ? 1 : 0;
+  popup.classList.toggle('high', desk.k > 0);   // at the computer, notes appear above the screen instead of over it
   composer.render();
 
   fpsAcc += dt; fpsN++;
@@ -663,7 +776,8 @@ window.__op = {
   ballPos: (p) => ({ x: p.body.position.x, y: p.body.position.y, z: p.body.position.z }),
   setColor(v) { colorBase = v - brain.cognition() * TUNE.colorFromCognition; grayPass.uniforms.saturation.value = v; ui.sat.value = v; },
   fps: () => fps,
-  brain, journal, loadedSave,
+  brain, journal, loadedSave, pc, desk,
+  sit: () => enterDesk(), leave: () => leaveDesk(),
   done: () => brain.state.order.slice(),
   color: () => grayPass.uniforms.saturation.value,
   hold(on) { mouseHeld = on; },
