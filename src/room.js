@@ -358,7 +358,15 @@ export function buildRoom(scene, world) {
       const bandCols = ['#b0553f', '#3f6fb0', '#c9a23a', '#3e7a4f'];
       const ball = new THREE.Mesh(new THREE.IcosahedronGeometry(0.026, 1), bandCols.map((c) => std({ color: c, roughness: 0.7 })));
       ball.geometry.clearGroups(); for (let f = 0; f < ball.geometry.attributes.position.count / 3; f++) ball.geometry.addGroup(f * 3, 3, f % 4);
-      tray.add(at(ball, 0.27, fy + 0.026, -0.06));
+      tray.add(at(ball, 0.315, fy + 0.026, -0.125));
+      // your journal. Click it to open it (J does the same from anywhere).
+      const book = new THREE.Group();
+      const cover = std({ color: '#3d2f28', roughness: 0.7, normalMap: T.plasticNormal(5), normalScale: new THREE.Vector2(0.5, 0.5) });
+      book.add(at(k.rbox(0.135, 0.02, 0.195, 0.004, cover), 0, 0.01, 0), at(k.box(0.127, 0.015, 0.189, m.paper), 0.003, 0.01, 0));
+      book.add(at(k.box(0.006, 0.0215, 0.196, std({ color: '#141210', roughness: 0.8 })), 0.04, 0.01, 0));        // elastic band
+      book.add(at(k.plane(0.07, 0.03, std({ map: T.label([['JOURNAL', 40]], { w: 256, h: 110, bg: '#e8e2d0', ink: '#2a2420', font: '"Courier New", monospace' }), roughness: 0.8 })), -0.012, 0.0204, -0.04, -Math.PI / 2));
+      tray.add(at(book, 0.2, fy, -0.055, 0, 0.12));
+      usable(book, 'journal');
       const badgeTex = T.label([['EMPLOYEE', 30], ['NAME: ____________', 20, 'normal'], ['FLOOR 7', 22]], { w: 256, h: 160, border: true });
       for (let n = 0; n < 5; n++) tray.add(at(k.box(0.085, 0.0015, 0.054, [m.paper, m.paper, std({ map: badgeTex, roughness: 0.5 }), m.paper, m.paper, m.paper]), 0.1 + n * 0.002, fy + 0.001 + n * 0.0016, 0.085, 0, 0.1 * (n - 2)));
     } else if (i === 1) {
@@ -488,7 +496,7 @@ export function buildRoom(scene, world) {
   const top = new THREE.Mesh(new THREE.PlaneGeometry(0.215, 0.28), std({ map: T.spreadsheet(), roughness: 0.95 }));
   top.rotation.x = -Math.PI / 2; top.position.y = 0.062; stack.add(top);
   staticCollider(0.11, 0.03, 0.14, stackX, DT + 0.03, stackZ);
-  [[0.5, -1.16, 0.1, true], [0.98, 0.0, -0.25, false], [-0.55, -1.12, -0.12, true]].forEach(([x, z, r, ss]) => {
+  [[0.5, -1.16, 0.1, true], [-1.03, -0.72, 0.15, false], [-0.55, -1.12, -0.12, true]].forEach(([x, z, r, ss]) => {
     makeSheet(ss ? 'spreadsheet' : 'memo', x, DT + 0.004, z, { rot: [0, r, 0] });
   });
   const spawnSheet = (x, y, z) => makeSheet('spreadsheet', x, y, z);
@@ -522,6 +530,20 @@ export function buildRoom(scene, world) {
   place(cradleP.group, 0.74, DT, -0.16, -Math.PI / 2 + 0.5, { col: [0.085, 0.07, 0.055] });
   usable(cradleP.group, 'cradle'); hitbox(cradleP.group, 0.16, 0.13, 0.09, 0, 0.075, 0);
   place(P.tissueBox(k), 1.25, DT, -0.3, Math.PI / 2, { col: [0.06, 0.04, 0.115] });
+  // a tub of thumbtacks, under the corkboard. You need one to pin anything up.
+  const tacks = new THREE.Group();
+  tacks.add(at(k.cyl(0.034, 0.03, 0.03, new THREE.MeshPhysicalMaterial({ color: '#dfe6ea', roughness: 0.1, transparent: true, opacity: 0.55 }), 20, true), 0, 0.015, 0), at(k.cyl(0.03, 0.03, 0.003, k.plastic('#c9ced2', 0.4), 20), 0, 0.0015, 0));
+  const tackCols = ['#c0392b', '#2a6db0', '#d9a830', '#3e7a4f', '#c0392b', '#e6e6e0', '#2a6db0', '#c0392b', '#d9a830'];
+  tackCols.forEach((c, i) => { const a = i * 2.4, r = 0.006 + (i % 3) * 0.008; tacks.add(at(new THREE.Mesh(new THREE.SphereGeometry(0.0065, 10, 8), std({ color: c, roughness: 0.3 })), Math.cos(a) * r, 0.009 + (i % 2) * 0.007, Math.sin(a) * r)); });
+  place(tacks, 1.24, DT, -0.11, 0, { col: [0.034, 0.015, 0.034] });
+  usable(tacks, 'tacks'); hitbox(tacks, 0.07, 0.04, 0.07, 0, 0.02, 0);
+  // things you can take in your hand that aren't paper: a pencil from the cup, a tack from the tub
+  function addTool(kind, x, y, z) {
+    let mesh;
+    if (kind === 'pencil') mesh = pencilMesh('#e8b923');
+    else { mesh = new THREE.Group(); mesh.add(at(new THREE.Mesh(new THREE.SphereGeometry(0.0075, 12, 10), std({ color: '#c0392b', roughness: 0.3 })), 0, 0.006, 0), at(k.cyl(0.0011, 0.0003, 0.014, m.steel, 6), 0, -0.006, 0)); }
+    return addProp(kind === 'pencil' ? 'pencilTool' : 'tack', mesh, new CANNON.Sphere(0.01), 0.005, x, y, z, { sound: 'pencil', grab: true, kind });
+  }
   // a few paper clips that never made it back to the drawer
   for (let n = 0; n < 4; n++) { const c = new THREE.Mesh(new THREE.TorusGeometry(0.008, 0.0009, 4, 12), m.steel); c.scale.x = 0.45; c.rotation.set(Math.PI / 2, 0, n * 2.3); c.position.set(0.31 + n * 0.03 + (n % 2) * 0.012, DT + 0.001, -0.78 - (n % 2) * 0.03); scene.add(c); }
 
@@ -706,7 +728,7 @@ export function buildRoom(scene, world) {
     detectorLed: ledMat, panels, GROUP, impact, spawnSheet, dispensers: [stack], makeCrumple, addBall, addPlane, plant, lever, pencilCup: cup, detector, removeProp, shredder, calendar: cal, computer, screen, printerOut, corkboard, pinSheet, pinned, unpinOldest, makeSheet,
     monitorView: { x: monX, y: monY + 0.01, z: monFront + 0.001, h: 0.265 }, stackTop: new THREE.Vector3(stackX, DT + 0.07, stackZ),
     // the detail pass
-    usables, examinables, outside, tick, drawers,
+    usables, examinables, outside, tick, drawers, addTool, tacks,
     chairBack: chairP.back, lamp: lampP, fan: fanP, phone: { ...ph, yaw: phoneYaw }, stapler: stap, mug: mugP, cradle: cradleP, monitor: mon, taskGlow,
   };
 }

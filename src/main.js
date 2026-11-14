@@ -224,6 +224,7 @@ const tmpV = new THREE.Vector3(), fwd = new THREE.Vector3(), right = new THREE.V
 const handPos = new THREE.Vector3(), handQuat = new THREE.Quaternion();
 const sheetTilt = new THREE.Quaternion().setFromEuler(new THREE.Euler(1.0, 0.3, 0.12));
 const planeTilt = new THREE.Quaternion().setFromEuler(new THREE.Euler(0.12, 0.3, 0));
+const pencilTiltR = new THREE.Quaternion().setFromEuler(new THREE.Euler(-0.75, 0, 0.35)), pencilTiltL = new THREE.Quaternion().setFromEuler(new THREE.Euler(-0.75, 0, -0.35));
 
 const ui = {
   overlay: document.getElementById('overlay'),
@@ -257,7 +258,27 @@ let erased = false;
 
 // ---------- Input ----------
 const canvas = renderer.domElement;
-ui.overlay.addEventListener('click', () => {
+// ---------- The menu: title screen before you clock in, pause menu after ----------
+const menu = {
+  cont: document.getElementById('mContinue'), fresh: document.getElementById('mNew'), controls: document.getElementById('mControls'),
+  table: document.getElementById('controls'), sub: document.getElementById('menuSub'), armed: false,
+};
+const hasProgress = () => brain.state.day > 1 || brain.state.order.length > 0 || brain.state.clockSec > 9 * 3600 + 90;
+function showMenu() {
+  const prog = hasProgress();
+  menu.armed = false; menu.fresh.classList.remove('warn');
+  if (!started) {
+    menu.sub.textContent = prog ? `DAY ${brain.state.day}` : 'PROTOTYPE';
+    menu.cont.textContent = prog ? 'CONTINUE' : 'CLOCK IN';
+    menu.fresh.textContent = 'NEW GAME'; menu.fresh.style.display = prog ? '' : 'none';
+  } else {
+    menu.sub.textContent = `PAUSED · DAY ${brain.state.day}`;
+    menu.cont.textContent = 'RESUME';
+    menu.fresh.textContent = 'RESTART RUN'; menu.fresh.style.display = '';
+  }
+  ui.overlay.style.display = 'flex';
+}
+function startGame() {
   Audio.startAudio();
   started = true;
   if (canvas.requestPointerLock && !fallbackLook) {
@@ -267,10 +288,19 @@ ui.overlay.addEventListener('click', () => {
     } catch { enterFallback(); }
   } else enterFallback();
   setTimeout(() => { if (!document.pointerLockElement) enterFallback(); }, 400);
+}
+menu.cont.addEventListener('click', startGame);
+menu.fresh.addEventListener('click', () => {
+  // starting over throws the save away, so it asks once first
+  if (hasProgress() && !menu.armed) { menu.armed = true; menu.fresh.textContent = 'ERASE THIS RUN?'; menu.fresh.classList.add('warn'); return; }
+  erased = true; brain.erase(); location.reload();
 });
+menu.fresh.addEventListener('mouseleave', () => { if (menu.armed) showMenu(); });
+menu.controls.addEventListener('click', () => menu.table.classList.toggle('open'));
 function enterFallback() { fallbackLook = true; resume(); }
 function resume() { paused = false; ui.overlay.style.display = 'none'; }
-function pause() { paused = true; ui.overlay.style.display = 'flex'; }
+function pause() { paused = true; if (radial.open) closeRadial(false); showMenu(); }
+showMenu();
 
 document.addEventListener('pointerlockchange', () => {
   if (document.pointerLockElement === canvas) { fallbackLook = false; resume(); }
@@ -309,6 +339,7 @@ window.addEventListener('keydown', (e) => {
     return;
   }
   if (e.code === 'KeyF') putDown();
+  if (e.code === 'KeyQ') swapHands();
   // E: pick up what the dot is on and turn it over in your hands
   if (e.code === 'KeyE' && !held && !crumple && !fold && hovered && hovered.obj && hovered.obj.userData.examine && peek.k < 0.1) { if (things.examine(hovered.obj)) hovered = null; }
   // the phone is off the hook: the number keys dial
@@ -330,6 +361,7 @@ window.addEventListener('mousemove', (e) => {
   if (!locked && !fallbackLook) return;
   if (journal.open) return;
   if (things.examining) { things.turn(THREE.MathUtils.clamp(e.movementX || 0, -200, 200), THREE.MathUtils.clamp(e.movementY || 0, -200, 200)); return; }
+  if (radial.open) { moveRadial(THREE.MathUtils.clamp(e.movementX || 0, -80, 80), THREE.MathUtils.clamp(e.movementY || 0, -80, 80)); return; }
   if (flight) {
     // in the air, the mouse steers the plane
     if (!flight.ending) {
@@ -361,6 +393,7 @@ window.addEventListener('mousedown', (e) => {
   if (dayEnd) { if (dayEnd.card) dayEnd.go = true; return; }
   if (replay || dreaming || flight) return;
   if (things.examining) { if (e.button === 2) things.putBack(); return; }
+  if (radial.open) { closeRadial(e.button === 0); return; }       // the wheel stayed open: click a wedge to pick it, anything else closes it
   if (desk.at) {
     if (e.button === 2) { leaveDesk(); return; }
     if (e.button !== 0) return;
@@ -372,7 +405,7 @@ window.addEventListener('mousedown', (e) => {
   if (recline.on) { sitUp(); return; }
   if (peek.k > 0.1) return;                  // both hands are on the wall
   if (e.button === 0) { mouseHeld = true; click(); }
-  else if (e.button === 2) putDown();
+  else if (e.button === 2) openRadial();        // a quick right-click still just puts it down
 });
 // mouse wheel: lean in for a closer look (or bring the thing in your hands closer)
 window.addEventListener('wheel', (e) => {
@@ -381,7 +414,14 @@ window.addEventListener('wheel', (e) => {
   if (busy()) return;
   zoomLevel = THREE.MathUtils.clamp(zoomLevel - e.deltaY * 0.0016, 0, 1);
 }, { passive: true });
-window.addEventListener('mouseup', (e) => { if (e.button === 0) { mouseHeld = false; releasePress(); } });
+window.addEventListener('mouseup', (e) => {
+  if (e.button === 0) { mouseHeld = false; releasePress(); }
+  if (e.button === 2 && radial.open) {
+    // let go on a wedge to pick it. A quick tap with nothing picked leaves the wheel open so you can choose with a click.
+    if (radial.sel < 0 && radial.def < 0 && radial.t < 0.35) radial.sticky = true;
+    else closeRadial(true);
+  }
+});
 
 // One button does everything: empty hand → pick up paper. Flat sheet in hand → crumple it. Ball in hand → toss it.
 // (A flat sheet goes into the shredder instead, if that's what you're looking at.)
@@ -389,6 +429,8 @@ function click() {
   if (crumple || fold) return;
   if (!held) { if (hovered) useHovered(); return; }
   if (held.t < 1) return;
+  if (held.kind === 'pencil') return;
+  if (held.kind === 'tack') { if (hovered && hovered.kind === 'corkboard') pinHeld(); return; }
   if (held.kind === 'sheet') {
     if (hovered && hovered.kind === 'shredder') startShred();
     else if (hovered && hovered.kind === 'corkboard') pinHeld();
@@ -399,17 +441,18 @@ function click() {
 }
 
 // ---------- Your hand: where held paper sits in the view ----------
-function updateHand(kind) {
+function updateHand(kind, side = 1) {
   camera.getWorldDirection(fwd);
   up.copy(camera.up).applyQuaternion(camera.quaternion);
   right.crossVectors(fwd, up).normalize();
   handPos.copy(camera.position)
     .addScaledVector(fwd, TUNE.hand.fwd)
-    .addScaledVector(right, Math.min(0.24, TUNE.hand.right * TUNE.hand.fwd * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) * camera.aspect))
+    .addScaledVector(right, side * Math.min(0.24, TUNE.hand.right * TUNE.hand.fwd * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) * camera.aspect))
     .addScaledVector(up, TUNE.hand.up);
   handQuat.copy(camera.quaternion);
   if (kind === 'sheet') handQuat.multiply(sheetTilt);
   if (kind === 'plane') handQuat.multiply(planeTilt);
+  if (kind === 'pencil') handQuat.multiply(side > 0 ? pencilTiltR : pencilTiltL);
 }
 
 // ---------- Picking paper up ----------
@@ -418,7 +461,9 @@ function useHovered() {
   if (hovered.kind === 'prop') { Audio.impact('paper', 0.6); grab(hovered.prop); }
   else if (hovered.kind === 'calendar') crossNextDay();
   else if (hovered.kind === 'computer') enterDesk();
-  else if (hovered.kind === 'pencils') enterDrums();
+  else if (hovered.kind === 'pencils') takeTool('pencil');      // one for each hand and you're drumming
+  else if (hovered.kind === 'tacks') takeTool('tack');
+  else if (hovered.kind === 'journal') journal.toggle();
   else if (hovered.kind === 'lever') startRecline();
   else if (hovered.kind === 'examine') { if (things.examine(hovered.obj)) hovered = null; }
   else if (things.use(hovered.kind, hovered.obj)) { /* lamp, fan, phone, stapler, mug, drawers, desk toy */ }
@@ -434,7 +479,7 @@ function useHovered() {
 function trackPaper(p) {
   paper.push(p);
   while (paper.length > TUNE.maxPaper) {
-    const i = paper.findIndex((q) => !held || q !== held.prop);
+    const i = paper.findIndex((q) => (!held || q !== held.prop) && (!left || q !== left.prop));
     if (i < 0) break;
     const old = paper.splice(i, 1)[0];
     if (highlighted === old.mesh) highlighted = null;
@@ -448,7 +493,7 @@ function grab(p) {
   b.velocity.set(0, 0, 0); b.angularVelocity.set(0, 0, 0);
   b.wakeUp();
   held = {
-    prop: p, kind: p.name === 'paperBall' ? 'ball' : p.name === 'plane' ? 'plane' : 'sheet', t: 0,
+    prop: p, kind: isTool(p.kind) ? p.kind : p.name === 'paperBall' ? 'ball' : p.name === 'plane' ? 'plane' : 'sheet', t: 0,
     fromPos: new THREE.Vector3().copy(b.position), fromQuat: new THREE.Quaternion().copy(b.quaternion),
   };
 }
@@ -470,8 +515,126 @@ function release(vel = null, spin = 0) {
 function putDown() {
   if (crumple || fold || !held || held.t < 1) return;
   press = null;
+  if (isTool(held.kind)) { returnTool(held.prop); held = null; return; }     // pencils go back in the cup, tacks back in the tub
   camera.getWorldDirection(fwd);
   release(tmpV.copy(fwd).multiplyScalar(0.5), 1);    // a gentle set-down in front of you
+}
+
+// ---------- Two hands ----------
+// The dot is your right hand. Your left hand can hold one thing while the right one goes and gets another:
+// a pencil in each and you start drumming; a sheet in one and a thumbtack in the other and you can pin it up.
+let left = null;            // { prop, kind, t, fromPos, fromQuat }, same shape as `held`
+const isTool = (kind) => kind === 'pencil' || kind === 'tack';
+function returnTool(p) {
+  if (p.kind === 'pencil') { const c = cupPencils.find((q) => !q.mesh.visible); if (c) c.mesh.visible = true; Audio.impact('pencil', 1.2); }
+  else Audio.impact('pencil', 0.6);
+  if (highlighted === p.mesh) highlighted = null;
+  room.removeProp(p);
+}
+function takeTool(kind) {
+  if (held || crumple || fold) return;
+  let from;
+  if (kind === 'pencil') {
+    const c = cupPencils.find((q) => q.mesh.visible); if (!c) return;      // the cup's out of pencils
+    c.mesh.visible = false; from = c.mesh.position;
+  } else from = room.tacks.getWorldPosition(tmpV);
+  const p = room.addTool(kind, from.x, from.y + 0.03, from.z);
+  Audio.impact('pencil', kind === 'pencil' ? 1.4 : 0.7);
+  grab(p);
+}
+// pass what you're holding to the other hand (or swap the two)
+function swapHands() {
+  if (crumple || fold || shred || busy() || (!held && !left) || (held && held.t < 1) || (left && left.t < 1)) return;
+  press = null;
+  const pass = (h) => (h ? { prop: h.prop, kind: h.kind, t: 0, fromPos: h.prop.mesh.position.clone(), fromQuat: h.prop.mesh.quaternion.clone() } : null);
+  const toRight = pass(left), toLeft = pass(held);
+  held = toRight; left = toLeft;
+  Audio.impact('paper', 0.5);
+}
+function updateLeft(dt) {
+  if (!left) return;
+  left.t = Math.min(1, left.t + dt / TUNE.grabTime);
+  updateHand(left.kind, -1);
+  const m = left.prop.mesh, e = easeOut(left.t);
+  m.position.lerpVectors(left.fromPos, handPos, e);
+  m.quaternion.copy(left.fromQuat).slerp(handQuat, e);
+  const b = left.prop.body;
+  b.position.copy(m.position); b.quaternion.copy(m.quaternion);
+  b.velocity.set(0, 0, 0); b.angularVelocity.set(0, 0, 0);
+  if (held) updateHand(held.kind);            // leave the shared hand position on the right hand, where everything else expects it
+  // a pencil in each hand: that's a pair of drumsticks
+  if (held && held.kind === 'pencil' && left.kind === 'pencil' && held.t >= 1 && left.t >= 1 && !busy()) {
+    room.removeProp(held.prop); room.removeProp(left.prop); held = null; left = null;
+    enterDrums();
+  }
+}
+
+// ---------- The radial menu (right-click): for things that can do more than one thing ----------
+const radial = { open: false, opts: [], sel: -1, x: 0, y: 0, t: 0, sticky: false, def: -1, target: null };
+const radialEl = document.getElementById('radial'), rg = radialEl.getContext('2d');
+const USE_LABEL = { mug: 'SIP', stapler: 'STAPLE', lamp: 'SWITCH', fan: 'SWITCH', phone: 'HANDSET', drawer: 'OPEN / CLOSE', cradle: 'SWING', pencils: 'TAKE ONE', tacks: 'TAKE ONE', journal: 'OPEN', prop: 'PICK UP', dispenser: 'TAKE ONE' };
+function radialOptions() {
+  const o = [];
+  if (crumple || fold || shred) return o;
+  if (held) {
+    if (held.t < 1) return o;
+    o.push({ id: 'down', label: isTool(held.kind) ? 'PUT BACK' : 'PUT DOWN' }, { id: 'swap', label: left ? 'SWAP HANDS' : 'LEFT HAND' });
+    return o;
+  }
+  if (hovered) {
+    if (hovered.kind !== 'examine') o.push({ id: 'use', label: USE_LABEL[hovered.kind] || 'USE' });
+    if (hovered.obj && hovered.obj.userData.examine) o.push({ id: 'examine', label: 'LOOK CLOSER' });
+  }
+  if (left) o.push({ id: 'swap', label: 'RIGHT HAND' });
+  return o;
+}
+const worthAMenu = (o) => o.length >= 2 || (o.length === 1 && o[0].id === 'swap');
+function openRadial() {
+  const o = radialOptions();
+  if (!worthAMenu(o)) { if (held) putDown(); return; }
+  Object.assign(radial, { open: true, opts: o, sel: -1, x: 0, y: 0, t: 0, sticky: false, def: held ? 0 : -1, target: hovered });
+  radialEl.style.left = ((dot.x + 1) * 50).toFixed(2) + '%'; radialEl.style.top = ((1 - dot.y) * 50).toFixed(2) + '%';
+  radialEl.style.display = 'block';
+  drawRadial();
+}
+function closeRadial(choose) {
+  if (!radial.open) return;
+  radial.open = false; radialEl.style.display = 'none';
+  const i = radial.sel >= 0 ? radial.sel : radial.def;
+  if (!choose || i < 0) return;
+  const id = radial.opts[i].id;
+  if (id === 'down') putDown();
+  else if (id === 'swap') swapHands();
+  else if (id === 'examine') { if (radial.target && things.examine(radial.target.obj)) hovered = null; }
+  else if (id === 'use' && radial.target) { hovered = radial.target; useHovered(); }
+}
+function moveRadial(dx, dy) {
+  radial.x += dx; radial.y += dy;
+  const len = Math.hypot(radial.x, radial.y), max = 105;
+  if (len > max) { radial.x *= max / len; radial.y *= max / len; }
+  const n = radial.opts.length, slice = (Math.PI * 2) / n;
+  const ang = Math.atan2(radial.y, radial.x) + Math.PI / 2;            // 0 = straight up, clockwise
+  radial.sel = len > 24 ? ((Math.round(ang / slice) % n) + n) % n : -1;
+  drawRadial();
+}
+function drawRadial() {
+  const g = rg, C = 160, n = radial.opts.length, slice = (Math.PI * 2) / n, gap = n > 1 ? 0.035 : 0;
+  g.clearRect(0, 0, 320, 320);
+  g.textAlign = 'center'; g.textBaseline = 'middle';
+  radial.opts.forEach((o, i) => {
+    const mid = -Math.PI / 2 + i * slice, a0 = mid - slice / 2 + gap, a1 = mid + slice / 2 - gap, on = i === radial.sel || (radial.sel < 0 && i === radial.def);
+    g.beginPath(); g.arc(C, C, 132, a0, a1); g.arc(C, C, 40, a1, a0, true); g.closePath();
+    g.fillStyle = i === radial.sel ? 'rgba(233,230,223,0.94)' : 'rgba(12,12,14,0.8)'; g.fill();
+    g.lineWidth = on ? 1.6 : 1; g.strokeStyle = on ? 'rgba(233,230,223,0.95)' : 'rgba(233,230,223,0.3)'; g.stroke();
+    g.fillStyle = i === radial.sel ? '#101012' : '#e9e6df';
+    g.font = 'bold 11.5px "Courier New", Courier, monospace';
+    const lx = C + Math.cos(mid) * 88, ly = C + Math.sin(mid) * 88;
+    const words = o.label.split(' '), lines = o.label.length > 9 && words.length > 1 ? [words.slice(0, Math.ceil(words.length / 2)).join(' '), words.slice(Math.ceil(words.length / 2)).join(' ')] : [o.label];
+    lines.forEach((ln, k) => g.fillText(ln.split('').join(' '), lx, ly + (k - (lines.length - 1) / 2) * 14));
+  });
+  // where your hand is in the wheel
+  g.beginPath(); g.arc(C + radial.x, C + radial.y, 3.2, 0, Math.PI * 2); g.fillStyle = 'rgba(240,238,230,0.9)'; g.fill();
+  g.beginPath(); g.arc(C, C, 40, 0, Math.PI * 2); g.strokeStyle = 'rgba(233,230,223,0.18)'; g.lineWidth = 1; g.stroke();
 }
 
 // ---------- Crumpling a sheet ----------
@@ -530,7 +693,7 @@ function toss() {
 
 // ---------- The computer: lean in to the monitor, lean back out ----------
 function enterDesk() {
-  if (held || crumple || desk.at) return;
+  if (held || left || crumple || desk.at) return;
   desk.at = true; desk.entering = true;
   desk.fromPos.copy(camera.position); desk.fromQuat.copy(camera.quaternion);
   // the chair ends up facing the desk
@@ -563,7 +726,7 @@ function pointAtScreen(e) {
   const hit = screenRay.intersectObject(room.screen, false)[0];
   if (hit && hit.uv) pc.point(hit.uv.x * 640, (1 - hit.uv.y) * 480, true);
   else pc.point(-1, -1, false);
-  canvas.style.cursor = pc.playing ? 'none' : '';      // out of the way while you fly the UFO
+  canvas.style.cursor = hit ? 'none' : '';             // over the glass, the computer's own pointer takes over
 }
 const NO_TURN = new THREE.Quaternion();
 const deskPos = new THREE.Vector3();
@@ -612,8 +775,12 @@ function pinHeld() {
   raycaster.far = TUNE.useReach;
   const hit = raycaster.intersectObject(room.corkboard, false)[0];
   if (!hit) return;
-  const sheet = held.prop, kind = sheet.kind;
-  held = null;
+  // it takes two hands: the sheet in one, a thumbtack in the other
+  const sheetHand = held && held.kind === 'sheet' ? held : left, tackHand = held && held.kind === 'tack' ? held : left;
+  if (!sheetHand || !tackHand || sheetHand.kind !== 'sheet' || tackHand.kind !== 'tack') return;
+  const sheet = sheetHand.prop, kind = sheet.kind;
+  room.removeProp(tackHand.prop);
+  held = null; left = null;
   const i = paper.indexOf(sheet); if (i >= 0) paper.splice(i, 1);
   room.removeProp(sheet);
   if (room.pinned.length >= TUNE.maxPinned) { room.unpinOldest(); brain.state.pinned.shift(); }
@@ -923,7 +1090,7 @@ const legParts = [-1, 1].map((side) => {
 const hipV = new THREE.Vector3(), footV = new THREE.Vector3();
 const lidTop = document.getElementById('lidTop'), lidBot = document.getElementById('lidBot');
 function startRecline() {
-  if (held || crumple || recline.on) return;
+  if (held || left || crumple || recline.on) return;
   Object.assign(recline, { on: true, out: false, t: 0, idle: 0, asleep: false, waking: false });
   player.spin = 0; keys.clear();
   player.yaw = Math.round(player.yaw / (Math.PI * 2)) * Math.PI * 2; lastYaw = player.yaw;     // facing the desk
@@ -959,7 +1126,7 @@ function updateRecline(dt) {
   }
   // legs: out from under the desk, around its edge, and up onto it
   const ke = easeInOut(r.leg);
-  legs.visible = r.leg > 0.01 && !replay;
+  legs.visible = false;                       // (Noah, detail pass 2: no feet. The camera alone says you're leaning back.)
   for (const p of legParts) {
     hipV.set(TUNE.seat.x + p.side * 0.09, 0.56, TUNE.seat.z - 0.2 + 0.2 * easeInOut(r.lean));
     footV.set(TUNE.seat.x + p.side * (0.1 - 0.015 * ke), 0.07 + (ROOM.deskTop - 0.01) * ke, TUNE.seat.z - 0.42 - 0.1 * ke + 0.3 * Math.sin(Math.PI * ke));
@@ -973,7 +1140,7 @@ function applyReclineCamera() {
   if (r.leg <= 0 && r.lean <= 0) return;
   const ke = easeInOut(r.leg), le = easeInOut(r.lean);
   // watch your feet go up, then tip back and look at the ceiling
-  let pitch = player.pitch + (-0.36 - player.pitch) * ke;
+  let pitch = player.pitch + (-0.1 - player.pitch) * ke;       // settle into the seat...
   pitch += (0.44 - pitch) * le;
   pitch += Math.sin(performance.now() / 1000 * 1.1) * 0.012 * le;        // breathing
   camera.position.set(TUNE.seat.x, TUNE.eyeSeated - 0.17 * le, TUNE.seat.z - 0.07 + 0.32 * le);
@@ -1210,7 +1377,7 @@ function updatePlayer(dt) {
   if (keys.has('ArrowDown')) player.pitch = Math.max(-1.5, player.pitch - look * 0.8);
 
   // the dot near an edge turns your head that way, faster the closer it is to the edge
-  if (dt > 0 && !paused && !journal.open && !busy()) {
+  if (dt > 0 && !paused && !journal.open && !busy() && !radial.open) {
     const push = (v) => { const k = Math.max(0, (Math.abs(v) - TUNE.edgeZone) / (0.96 - TUNE.edgeZone)); return Math.sign(v) * Math.min(1, k) ** 1.6; };
     player.yaw -= push(dot.x) * TUNE.edgeTurn * dt;
     player.pitch = THREE.MathUtils.clamp(player.pitch + push(dot.y) * TUNE.edgeTilt * dt, -1.5, 1.45);
@@ -1312,12 +1479,13 @@ function firstHit(far) {
     if (!o.isMesh || !shown(o) || o.userData.noHit) continue;
     const mat = Array.isArray(o.material) ? o.material[0] : o.material;
     if (mat.transparent && mat.opacity < 0.5 && !mat.alphaMap) continue;
-    if (held && within(o, held.prop.mesh)) continue;
+    if ((held && within(o, held.prop.mesh)) || (left && within(o, left.prop.mesh))) continue;
     return h;
   }
   return null;
 }
 function updateHover() {
+  if (radial.open) return;                  // the wheel is about whatever you opened it on
   hovered = null;
   if (crumple || shred || fold || journal.open || busy() || peek.k > 0.1 || things.sipping) return;
   aimRay();
@@ -1325,7 +1493,10 @@ function updateHover() {
   const owner = hit ? ownerOf(hit.object) : null;
   if (held) {
     // with a flat sheet in your hand, the shredder and the corkboard are things you can use it on
-    if (held.kind === 'sheet' && held.t >= 1 && owner && (owner.kind === 'shredder' || owner.kind === 'corkboard')) hovered = owner;
+    if (held.t >= 1 && owner) {
+      const canPin = (held.kind === 'sheet' && left && left.kind === 'tack') || (held.kind === 'tack' && left && left.kind === 'sheet');
+      if ((owner.kind === 'shredder' && held.kind === 'sheet') || (owner.kind === 'corkboard' && canPin)) hovered = owner;
+    }
     return;
   }
   if (owner) {
@@ -1401,6 +1572,7 @@ function step(dt) {
     p.mesh.position.copy(p.body.interpolatedPosition); p.mesh.quaternion.copy(p.body.interpolatedQuaternion);
   }
   updateHeld(dt);
+  updateLeft(dt);
   if (crumple) updateCrumple(dt);
   if (press && !fold) { press.t += dt; if (press.t > TUNE.foldHold && held && held.kind === 'sheet' && held.t >= 1) startFold(); }
   if (fold) updateFold(dt);
@@ -1458,6 +1630,7 @@ function frame(now) {
   const lean = busy() || peek.k > 0.1 ? 0 : Math.max(zoomLevel, keys.has('ShiftLeft') || keys.has('ShiftRight') ? 1 : 0);
   const fovTarget = calendarFocus > 0 ? TUNE.fovCalendar : flight && !flight.ending ? 84 : TUNE.fov + (TUNE.zoomFov - TUNE.fov) * lean;
   room.tick(now / 1000);
+  if (radial.open) radial.t += dt;
   screenGlow.position.set(room.monitorView.x, room.monitorView.y, room.monitorView.z + 0.3);
   screenGlow.intensity += ((pc.power === 'on' || pc.power === 'boot' ? 0.55 : 0) - screenGlow.intensity) * Math.min(1, dt * 4);
   grayPass.uniforms.inspect.value += ((things.examining ? 1 : lean * 0.5) - grayPass.uniforms.inspect.value) * Math.min(1, dt * 6);
@@ -1468,7 +1641,8 @@ function frame(now) {
   ui.cross.style.opacity = busy() ? 0 : 1;
   ui.cross.style.left = ((dot.x + 1) * 50).toFixed(2) + '%'; ui.cross.style.top = ((1 - dot.y) * 50).toFixed(2) + '%';
   const hintText = things.examining ? 'MOUSE · TURN IT OVER      WHEEL · CLOSER      E · PUT IT BACK' : things.phoneUp && !busy() ? '0 – 9 · DIAL      CLICK THE PHONE · HANG UP'
-    : hovered && hovered.obj && hovered.obj.userData.examine && !held ? (hovered.kind === 'examine' ? 'E · LOOK CLOSER' : 'CLICK · USE      E · LOOK CLOSER') : desk.at ? 'RIGHT-CLICK · LEAN BACK' : drums.on ? 'LEFT / RIGHT CLICK · DRUM      Q · PUT THE PENCILS DOWN' : recline.on && !recline.asleep && !recline.out && recline.lean >= 1 ? 'CLICK · SIT UP' : '';
+    : radial.open ? '' : hovered && hovered.obj && hovered.obj.userData.examine && !held ? (hovered.kind === 'examine' ? 'E · LOOK CLOSER' : 'CLICK · USE      RIGHT-CLICK · MORE')
+    : hovered && !held && left ? 'CLICK · USE      RIGHT-CLICK · MORE' : desk.at ? 'RIGHT-CLICK · LEAN BACK' : drums.on ? 'LEFT / RIGHT CLICK · DRUM      Q · PUT THE PENCILS DOWN' : recline.on && !recline.asleep && !recline.out && recline.lean >= 1 ? 'CLICK · SIT UP' : '';
   if (hintText) deskHint.textContent = hintText;
   deskHint.style.opacity = hintText && !replay ? 1 : 0;
   popup.classList.toggle('high', desk.k > 0);   // at the computer, notes appear above the screen instead of over it
@@ -1523,7 +1697,8 @@ window.__op = {
   ballPos: (p) => ({ x: p.body.position.x, y: p.body.position.y, z: p.body.position.z }),
   setColor(v) { colorBase = v - brain.cognition() * TUNE.colorFromCognition; grayPass.uniforms.saturation.value = v; ui.sat.value = v; },
   fps: () => fps,
-  brain, journal, loadedSave, pc, desk, camera, pointAtScreen, things, peek, scene, renderer, gtao, bloom, sun,
+  brain, journal, loadedSave, pc, desk, camera, pointAtScreen, things, peek, scene, renderer, gtao, bloom, sun, radial,
+  left: () => (left ? left.prop.name : null), swap() { swapHands(); }, openRadial, closeRadial, moveRadial, radialOptions,
   use() { useHovered(); }, zoom(v) { zoomLevel = v; },
   // draw one frame right now (the preview pane doesn't always run the loop)
   draw(yaw, pitch) { if (yaw !== undefined) this.look(yaw, pitch); step(1 / 60); gtao.scene = renderPass.scene; gtao.camera = renderPass.camera; composer.render(); },

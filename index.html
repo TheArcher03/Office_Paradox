@@ -11,14 +11,24 @@
     canvas { display: block; }
     #crosshair { position: fixed; left: 50%; top: 50%; width: 6px; height: 6px; margin: -3px 0 0 -3px; border-radius: 50%; background: rgba(240,238,230,0.75); box-shadow: 0 0 2px rgba(0,0,0,0.6); transition: transform 0.12s, background 0.12s; pointer-events: none; }
     #crosshair.hot { transform: scale(2.1); background: rgba(255,255,255,0.95); }
-    #overlay { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(8,8,10,0.86); cursor: pointer; z-index: 5; padding: 16px; box-sizing: border-box; }
-    #overlay .card { max-width: 440px; text-align: center; }
-    #overlay h1 { font-weight: normal; font-size: 30px; letter-spacing: 0.32em; margin: 0 0 6px; }
-    #overlay .sub { color: var(--dim); font-size: 13px; letter-spacing: 0.2em; margin-bottom: 30px; }
-    #overlay .go { display: inline-block; border: 1px solid var(--ink); padding: 10px 22px; letter-spacing: 0.24em; font-size: 14px; margin-bottom: 28px; }
-    #overlay table { margin: 0 auto; font-size: 12.5px; color: var(--dim); border-collapse: collapse; text-align: left; }
+    #overlay { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; z-index: 5; padding: 16px; box-sizing: border-box;
+      background: radial-gradient(ellipse at center, rgba(8,8,10,0.62) 0%, rgba(4,4,6,0.9) 78%); -webkit-backdrop-filter: blur(5px); backdrop-filter: blur(5px); }
+    #overlay .card { width: min(460px, 100%); text-align: center; }
+    #overlay .studio { color: var(--dim); font-size: 11px; letter-spacing: 0.5em; margin-bottom: 22px; opacity: 0.8; }
+    #overlay h1 { font-weight: normal; font-size: clamp(20px, 5.4vw, 38px); white-space: nowrap; letter-spacing: 0.34em; margin: 0 0 14px 0.34em; text-shadow: 0 0 22px rgba(255,255,255,0.14); }
+    #overlay .rule { width: 64px; height: 1px; background: var(--ink); opacity: 0.5; margin: 0 auto 14px; }
+    #overlay .sub { color: var(--dim); font-size: 12.5px; letter-spacing: 0.24em; margin-bottom: 34px; min-height: 16px; }
+    #overlay .menu { display: flex; flex-direction: column; gap: 10px; align-items: center; margin-bottom: 26px; }
+    #overlay button { font: inherit; color: var(--ink); background: rgba(240,238,230,0.02); border: 1px solid rgba(240,238,230,0.28); width: 250px; padding: 11px 0; letter-spacing: 0.26em; font-size: 13px; cursor: pointer; transition: background 0.15s, border-color 0.15s, letter-spacing 0.15s; }
+    #overlay button:hover, #overlay button:focus-visible { background: rgba(240,238,230,0.1); border-color: var(--ink); letter-spacing: 0.3em; outline: none; }
+    #overlay button.primary { border-color: var(--ink); background: rgba(240,238,230,0.08); }
+    #overlay button.warn { border-color: #c98a7a; color: #f0c8bc; }
+    #overlay table { margin: 0 auto 22px; font-size: 12.5px; color: var(--dim); border-collapse: collapse; text-align: left; display: none; }
+    #overlay table.open { display: table; }
     #overlay td { padding: 3px 10px; }
     #overlay td:first-child { color: var(--ink); text-align: right; white-space: nowrap; }
+    #overlay .foot { color: var(--dim); font-size: 11px; letter-spacing: 0.14em; opacity: 0.7; }
+    #radial { position: fixed; width: 320px; height: 320px; margin: -160px 0 0 -160px; pointer-events: none; z-index: 2; display: none; }
     #debug { position: fixed; right: 12px; top: 12px; background: rgba(10,10,12,0.82); border: 1px solid #444; padding: 10px 12px; font-size: 12px; display: none; z-index: 6; min-width: 220px; }
     #debug button { font: inherit; color: var(--ink); background: none; border: 1px solid #666; padding: 5px 10px; cursor: pointer; width: 100%; }
     #debug label { display: block; margin-bottom: 4px; }
@@ -99,24 +109,33 @@
     <div class="row muted" id="dbgInfo"></div>
     <div class="muted">Esc frees the mouse · ` to close</div>
   </div>
+  <canvas id="radial" width="320" height="320"></canvas>
   <div id="overlay">
     <div class="card">
+      <div class="studio">TWOFOLD PRODUCTIONS</div>
       <h1>OFFICE PARADOX</h1>
-      <div class="sub">PROTOTYPE · STAGE 5 · THE DETAIL PASS</div>
-      <div class="go">CLICK TO CLOCK IN</div>
-      <table>
+      <div class="rule"></div>
+      <div class="sub" id="menuSub">PROTOTYPE</div>
+      <div class="menu">
+        <button id="mContinue" class="primary">CLOCK IN</button>
+        <button id="mNew">NEW GAME</button>
+        <button id="mControls">CONTROLS</button>
+      </div>
+      <table id="controls">
         <tr><td>Mouse</td><td>Move the dot. Push it toward an edge to turn</td></tr>
-        <tr><td>A / D</td><td>Spin the chair</td></tr>
         <tr><td>Click</td><td>Use your hands</td></tr>
+        <tr><td>Right-click</td><td>Put it down. Hold for more options</td></tr>
+        <tr><td>Q</td><td>Pass it to your other hand</td></tr>
         <tr><td>E</td><td>Pick something up and look it over</td></tr>
         <tr><td>Space</td><td>Stand up (hold)</td></tr>
         <tr><td>Shift / Wheel</td><td>Lean in for a closer look</td></tr>
-        <tr><td>Right-click</td><td>Put it down</td></tr>
+        <tr><td>A / D</td><td>Spin the chair</td></tr>
         <tr><td>J</td><td>Journal</td></tr>
         <tr><td>Arrow keys</td><td>Look (if the mouse won't lock)</td></tr>
         <tr><td>Esc</td><td>Pause</td></tr>
-        <tr><td>`</td><td>Debug: color, throw strength, reset, erase save</td></tr>
+        <tr><td>`</td><td>Debug panel</td></tr>
       </table>
+      <div class="foot" id="menuFoot">Best with a mouse and headphones</div>
     </div>
   </div>
   <script type="module" src="/src/main.js"></script>

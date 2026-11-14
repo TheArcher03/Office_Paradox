@@ -382,8 +382,8 @@ export function createComputer({ brain, sfx = () => {}, onPrint = () => {}, onSc
     else {
       drawDesktop();
       // mouse pointer (tucked away while you're flying)
-      // (also not drawn when the player's own mouse cursor is doing the pointing)
-      const { x, y } = st.real || (game.state === 'play' && st.win === 'browser') ? { x: -40, y: -40 } : st.cur;
+      // (it follows the player's real mouse, which is hidden while it's over the glass)
+      const { x, y } = (st.real && st.off) || (game.state === 'play' && st.win === 'browser') ? { x: -40, y: -40 } : st.cur;
       g.fillStyle = '#fff'; g.strokeStyle = '#000'; g.lineWidth = 1.5;
       g.beginPath(); g.moveTo(x, y); g.lineTo(x, y + 17); g.lineTo(x + 4.5, y + 13); g.lineTo(x + 8, y + 20); g.lineTo(x + 10.5, y + 19); g.lineTo(x + 7, y + 12); g.lineTo(x + 12.5, y + 12); g.closePath(); g.fill(); g.stroke();
     }
